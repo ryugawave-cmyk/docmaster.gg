@@ -53,19 +53,14 @@ const COMPRESS_LEVELS = [
 // pick based on what they'll do with the file, not how it's built.
 const WORD_MODE_CARDS = [
   {
-    id: 'exact', icon: 'document', title: 'Exact Layout', recommended: true,
-    desc: 'Looks exactly like your PDF while keeping content editable.',
-    bestFor: ['Forms', 'Certificates', 'Invoices', 'Government Documents'],
+    id: 'ai', icon: 'sparkle', title: 'Editable (AI)', recommended: true,
+    desc: 'AI reads the whole page — text, tables, images, signatures and colours — and recreates it as fully editable content. Runs on your device; the first use downloads the model and takes a little longer.',
+    bestFor: ['Forms', 'Invoices', 'Reports', 'Mixed layouts'],
   },
   {
-    id: 'ai', icon: 'sparkle', title: 'Smart (AI)',
-    desc: 'AI reads the whole page and rebuilds its text, tables, images and colours as editable content. Runs on your device; the first use downloads the model and takes a little longer.',
-    bestFor: ['Complex tables', 'Reports', 'Mixed layouts'],
-  },
-  {
-    id: 'layout', icon: 'edit', title: 'Editable Layout',
-    desc: 'Optimized for easy editing and content restructuring.',
-    bestFor: ['Reports', 'Articles', 'Books', 'Notes'],
+    id: 'exact', icon: 'document', title: 'Exact Copy',
+    desc: 'A pixel-perfect copy of the page. Text is editable; images and graphics stay fixed in the background.',
+    bestFor: ['Certificates', 'Government Documents'],
   },
 ];
 // Power-user modes, tucked into a collapsed "Advanced options" disclosure so the
@@ -153,7 +148,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
   let overlay = null;
   let selectedId = 'compress';
   const settings = {
-    wordMode: 'exact', imgRes: 'screen',
+    wordMode: 'ai', imgRes: 'screen',
     compressMode: 'level', compressLevel: 'recommended',
     compressTargetValue: 0, compressTargetUnit: 'KB',
   };
@@ -364,7 +359,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
     const wrap = el('div', { class: 'bpx-exp__wordmode' });
 
     // Advanced modes aren't selectable yet; make sure we never sit on one.
-    if (WORD_MODE_ADVANCED.some((m) => m.id === settings.wordMode)) settings.wordMode = 'exact';
+    if (WORD_MODE_ADVANCED.some((m) => m.id === settings.wordMode)) settings.wordMode = 'ai';
 
     const sync = () => {
       for (const c of wrap.querySelectorAll('.bpx-exp__card')) {
