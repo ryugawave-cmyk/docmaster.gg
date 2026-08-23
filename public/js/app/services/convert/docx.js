@@ -170,11 +170,16 @@ function faithfulBody(content, addImage) {
   pages.forEach((pg, pi) => {
     const imgBlocks = [];
     const flow = [];
+    let lastWasTable = false;
     for (const b of pg.blocks) {
-      if (b.type === 'table') flow.push(tableXml(b, addImage));
-      else if (b.type === 'image') imgBlocks.push(b);
-      else flow.push(styledPara(b, addImage));
+      if (b.type === 'table') {
+        if (lastWasTable) flow.push(TABLE_SEP); // keep adjacent tables from merging
+        flow.push(tableXml(b, addImage));
+        lastWasTable = true;
+      } else if (b.type === 'image') { imgBlocks.push(b); }
+      else { flow.push(styledPara(b, addImage)); lastWasTable = false; }
     }
+    if (lastWasTable) flow.push(TABLE_SEP); // required paragraph after a trailing table
     // Images as FLOATING, page-anchored drawings at their exact PDF position and
     // size — a logo, barcode, photo or signature stays pinned where it belongs,
     // and two images can sit side by side (impossible with inline paragraphs,
@@ -251,8 +256,8 @@ function styledPara(b, addImage) {
     : b.align === 'right' ? '<w:jc w:val="right"/>'
       : b.align === 'justify' ? '<w:jc w:val="both"/>' : '';
   const ind = b.x > 4 && !shading ? `<w:ind w:left="${TW(b.x)}"/>` : '';
-  const before = b.type === 'heading' ? 160 : 40;
-  const after = b.type === 'heading' ? 80 : 60;
+  const before = b.type === 'heading' ? 80 : 20;
+  const after = b.type === 'heading' ? 40 : 20;
   const rpr = runProps({
     bold: st.bold || b.type === 'heading', italic: st.italic,
     size: SZHP(st.size || 16), color: st.color, font: st.font,
@@ -271,8 +276,8 @@ function tableXml(tbl, addImage) {
   const borders = '<w:tblBorders>'
     + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')
     + '</w:tblBorders>';
-  const cellMar = '<w:tblCellMar><w:top w:w="30" w:type="dxa"/><w:left w:w="80" w:type="dxa"/>'
-    + '<w:bottom w:w="30" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar>';
+  const cellMar = '<w:tblCellMar><w:top w:w="8" w:type="dxa"/><w:left w:w="80" w:type="dxa"/>'
+    + '<w:bottom w:w="8" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar>';
   const ind = tbl.left > 4 ? `<w:tblInd w:w="${TW(tbl.left)}" w:type="dxa"/>` : '';
   const tblPr = '<w:tblPr>'
     + `<w:tblW w:w="${totalTw}" w:type="dxa"/>${ind}<w:tblLayout w:type="fixed"/>`
@@ -291,9 +296,15 @@ function tableXml(tbl, addImage) {
     return `<w:tr>${tcs}${pad}</w:tr>`;
   }).join('');
 
-  return `<w:tbl>${tblPr}<w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`
-    + '<w:p><w:pPr><w:spacing w:after="60"/></w:pPr></w:p>';
+  // No trailing paragraph here — callers insert a minimal separator ONLY where OOXML
+  // needs one (between two adjacent tables, or after a final table). An unconditional
+  // empty paragraph after every table bloated pages and spawned blank pages in Word.
+  return `<w:tbl>${tblPr}<w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`;
 }
+
+// Minimal paragraph that keeps two tables from merging / caps a trailing table,
+// with near-zero height so it doesn't inflate the page.
+const TABLE_SEP = '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="60" w:lineRule="exact"/></w:pPr></w:p>';
 
 function cellXml(c, cols, addImage) {
   const wsum = sumCols(cols, c.colStart, c.span);
@@ -360,12 +371,19 @@ function aiBody(content, aiPages, addImage) {
       parts.push(`<w:p><w:r>${anchors}</w:r></w:p>`);
     }
 
+    let lastWasTable = false;
     for (const b of blocks) {
       // `geom` blocks come from the geometry recovery (aiLayout.reconstructLeftovers)
       // and are already in reconstruct-native shape, so they go straight to the
       // shared table/paragraph builders; the AI-region blocks are converted first.
-      if (b && b.kind === 'table') parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW), addImage));
-      else if (b && b.kind === 'paragraph') parts.push(styledPara(b.geom ? b : aiParaToBlock(b), addImage));
+      if (b && b.kind === 'table') {
+        if (lastWasTable) parts.push(TABLE_SEP); // keep adjacent tables from merging
+        parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW), addImage));
+        lastWasTable = true;
+      } else if (b && b.kind === 'paragraph') {
+        parts.push(styledPara(b.geom ? b : aiParaToBlock(b), addImage));
+        lastWasTable = false;
+      }
     }
     if (!blocks.length && !imgs.length) parts.push('<w:p/>');
 
@@ -373,8 +391,10 @@ function aiBody(content, aiPages, addImage) {
     const mar = TW(MPX);
     const sectPr = `<w:sectPr><w:pgSz w:w="${secW}" w:h="${secH}"/>`
       + `<w:pgMar w:top="${mar}" w:right="${mar}" w:bottom="${mar}" w:left="${mar}" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>`;
+    // The section-carrier paragraph (mid-doc) doubles as the required paragraph after
+    // a trailing table; at the very end (body-level sectPr) add one only if needed.
     if (pi < pages.length - 1) parts.push(`<w:p><w:pPr>${sectPr}</w:pPr></w:p>`);
-    else parts.push(sectPr);
+    else { if (lastWasTable) parts.push('<w:p/>'); parts.push(sectPr); }
   });
 
   if (!pages.length) {
