@@ -383,6 +383,9 @@ function aiParaToBlock(b) {
       size: st.size || 16,
       color: st.color,
       font: st.font,
+      // Carry the sampled fill so styledPara shades coloured bars/banners (shd()
+      // skips near-white, so plain body text on white is never painted).
+      boxBg: st.boxBg || '',
     },
   };
 }
@@ -427,20 +430,27 @@ function absoluteBody(content, addImage, cleanBg) {
 
     if (hasRaster) {
       // Full-page background raster (all graphics), then masked editable text.
+      // The raster already carries every picture (logo/signature/photo/QR) exactly,
+      // so we do NOT overlay recovered images here: recovery is best-effort and a
+      // mis-detected region (e.g. a pale form-field box) would drop a blank crop
+      // over real text. Exact = raster + editable text, nothing covering it.
       const bgId = addImage(bgSrc);
       anchors.push(anchor(0, 0, pg.w, pg.h, z++, pictureGraphic(pg.w, pg.h, bgId, z), true));
-      for (const r of pg.runs) {
-        // Complex-script runs (Devanagari & other Indic, Arabic, …) are extracted
-        // glyph-by-glyph with unreliable Unicode/order, so an editable overlay box
-        // would SCRAMBLE them (detached matras, dropped conjuncts). They are already
-        // correct in the page raster, so leave them baked — no overlay, no mask.
-        // rasterImages.maskExtractedText leaves the same runs in the raster to match.
-        if (hasComplexScript(r.text)) continue;
-        // Tight box matching the baked glyph's footprint so its boxBg mask covers
-        // the original without bleeding onto neighbouring borders/graphics.
-        const w = Math.max(r.w || 0, (r.fontSize || 14) * 0.5);
-        const h = Math.max(r.h || 0, (r.fontSize || 14) * 1.1);
-        anchors.push(anchor(r.x, r.y, w, h, z++, textboxGraphic(w, h, r, r.boxBg)));
+      // Pass 2 — "make editable": overlay the text as LINE-SEGMENT boxes (whole
+      // phrases/lines), not one box per glyph, so the result is genuinely editable
+      // (you type into sentences, not fragments). Each segment box is filled with
+      // its sampled background so the baked glyphs underneath stay masked. Complex-
+      // script runs are excluded from segments and left baked in the raster (an
+      // editable overlay would scramble their matras/conjuncts — see hasComplexScript;
+      // rasterImages.maskExtractedText keeps the matching runs in the raster).
+      for (const seg of segmentRuns(pg.runs, { mask: true })) {
+        const fs = seg.parts[0].run.fontSize || 14;
+        // Keep the mask box tight to the segment's real extent so its fill can't
+        // bleed onto an adjacent border/seal/graphic in the raster underneath.
+        // spAutoFit (in lineTextboxGraphic) then grows it just enough to fit text.
+        const w = Math.max(seg.right - seg.x, fs * 0.5);
+        const h = Math.max(seg.h || 0, fs * 1.3);
+        anchors.push(anchor(seg.x, seg.top, w, h, z++, lineTextboxGraphic(w, h, seg)));
       }
     } else {
       // 1) Table cell borders first (drawn behind text/images).
@@ -456,10 +466,12 @@ function absoluteBody(content, addImage, cleanBg) {
         const rId = addImage(im.src);
         anchors.push(anchor(im.x, im.y, im.w, im.h, z++, pictureGraphic(im.w, im.h, rId, z)));
       }
-      // 3) Text runs as absolutely-positioned editable text boxes, on top.
-      for (const r of pg.runs) {
-        const w = boxW(r), h = boxH(r);
-        anchors.push(anchor(r.x, r.y, w, h, z++, textboxGraphic(w, h, r)));
+      // 3) Text as line-segment editable text boxes (whole phrases), on top.
+      for (const seg of segmentRuns(pg.runs, { mask: false })) {
+        const fs = seg.parts[0].run.fontSize || 14;
+        const w = (seg.right - seg.x) + fs * 1.4;
+        const h = Math.max(seg.h || 0, fs * 1.25) + 2;
+        anchors.push(anchor(seg.x, seg.top, w, h, z++, lineTextboxGraphic(w, h, seg)));
       }
     }
 
@@ -485,10 +497,66 @@ function absoluteBody(content, addImage, cleanBg) {
   return parts.join('');
 }
 
-// Give a text box a little slack so a glyph that measured slightly wide than its
-// extracted advance width is never clipped.
-const boxW = (r) => Math.max(r.w || 0, (r.fontSize || 14)) + (r.fontSize || 14) * 1.4;
-const boxH = (r) => Math.max(r.h || 0, (r.fontSize || 14) * 1.25) + 2;
+/**
+ * Group a page's runs into LINE SEGMENTS for the editable overlay: contiguous runs
+ * that share a baseline AND (when masking) the same sampled background, with no
+ * column-width gap between them. Each segment becomes ONE editable text box holding
+ * its words as separate styled runs — so bold/colour/size variation within a line
+ * is preserved, yet the whole phrase edits as a unit (fixing the per-glyph mosaic).
+ *
+ * A segment never spans a column gap (>~1.2 em) or a background-colour change, so
+ * its boxBg mask stays tight over a single uniform region. With `mask:true`,
+ * complex-script runs are dropped (kept baked in the raster — see hasComplexScript).
+ *
+ * @returns {{x:number, top:number, right:number, h:number, bg:string,
+ *   parts:{run:object, space:boolean}[]}[]}
+ */
+function segmentRuns(runs, { mask }) {
+  const usable = (runs || []).filter((r) =>
+    String(r && r.text != null ? r.text : '').length && !(mask && hasComplexScript(r.text)));
+  const sorted = usable.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+
+  // Group into baseline lines.
+  const lines = [];
+  for (const r of sorted) {
+    const last = lines[lines.length - 1];
+    const tol = Math.min(r.h || 0, last ? last.h : (r.h || 0)) * 0.6;
+    if (last && Math.abs(r.y - last.y) <= tol) {
+      last.parts.push(r);
+      last.h = Math.max(last.h, r.h || 0);
+      last.y = (last.y * (last.parts.length - 1) + r.y) / last.parts.length;
+    } else {
+      lines.push({ y: r.y, h: r.h || 0, parts: [r] });
+    }
+  }
+
+  // Split each line into contiguous, same-background segments.
+  const segments = [];
+  for (const ln of lines) {
+    ln.parts.sort((a, b) => a.x - b.x);
+    let seg = null;
+    for (const r of ln.parts) {
+      const fs = r.fontSize || 14;
+      const bg = mask ? (normHex(r.boxBg) || '') : '';
+      if (seg && seg.bg === bg) {
+        const gap = r.x - seg.right;
+        if (gap <= fs * 1.2) {
+          // A real inter-word space is ≥ ~0.15 em; a tighter gap is a glyph split.
+          const space = gap > fs * 0.15;
+          seg.parts.push({ run: r, space });
+          seg.right = Math.max(seg.right, r.x + (r.w || 0));
+          seg.h = Math.max(seg.h, r.h || 0);
+          seg.top = Math.min(seg.top, r.y);
+          continue;
+        }
+      }
+      if (seg) segments.push(seg);
+      seg = { x: r.x, top: r.y, right: r.x + (r.w || 0), h: r.h || 0, bg, parts: [{ run: r, space: false }] };
+    }
+    if (seg) segments.push(seg);
+  }
+  return segments;
+}
 
 /** Wrap a graphic in a page-anchored floating drawing at (x,y) sized w×h (px).
  *  `behind=true` sends it behind the text layer (used for the page raster). */
@@ -505,28 +573,35 @@ function anchor(x, y, w, h, id, graphicData, behind = false) {
     + '</wp:anchor></w:drawing>';
 }
 
-/** An editable text box carrying one styled run at absolute position. `maskBg`
- *  (a 6-hex colour, no #) fills the box so it hides the same text baked into the
- *  page raster beneath it; empty/absent → transparent box. */
-function textboxGraphic(w, h, r, maskBg) {
+/** An editable text box holding ONE line-segment: the segment's words emitted as
+ *  separate styled runs in a single paragraph, so per-word bold/colour/size survive
+ *  while the whole line edits as a unit. `seg.bg` (6-hex, no #) fills the box to
+ *  mask the same text baked into the page raster beneath it; empty → transparent. */
+function lineTextboxGraphic(w, h, seg) {
   const W = EMU(w), H = EMU(h);
-  const jc = r.align === 'center' ? '<w:jc w:val="center"/>'
-    : r.align === 'right' ? '<w:jc w:val="right"/>' : '';
-  const rpr = runProps({
-    bold: r.bold, italic: r.italic, size: SZHP(r.fontSize || 14),
-    color: r.color, font: r.fontFamily,
-  });
-  const hex = normHex(maskBg);
+  const first = seg.parts[0].run;
+  const jc = first.align === 'center' ? '<w:jc w:val="center"/>'
+    : first.align === 'right' ? '<w:jc w:val="right"/>' : '';
+  const runsXml = seg.parts.map(({ run, space }) => {
+    const rpr = runProps({
+      bold: run.bold, italic: run.italic, size: SZHP(run.fontSize || 14),
+      color: run.color, font: run.fontFamily,
+    });
+    const t = (space ? ' ' : '') + String(run.text == null ? '' : run.text).replace(/\n/g, ' ');
+    return '<w:r>' + rpr + `<w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
+  }).join('');
+  const hex = normHex(seg.bg);
   const fill = hex ? `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>` : '<a:noFill/>';
-  const paras = String(r.text).split('\n').map((line) =>
-    `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>`
-    + '<w:r>' + rpr + `<w:t xml:space="preserve">${xml(line)}</w:t></w:r></w:p>`).join('');
+  const para = `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>${runsXml}</w:p>`;
   return `<a:graphicData uri="${WPS_NS}"><wps:wsp xmlns:wps="${WPS_NS}"><wps:cNvSpPr txBox="1"/>`
     + `<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${W}" cy="${H}"/></a:xfrm>`
     + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}<a:ln><a:noFill/></a:ln></wps:spPr>`
-    + `<wps:txbx><w:txbxContent>${paras}</w:txbxContent></wps:txbx>`
+    + `<wps:txbx><w:txbxContent>${para}</w:txbxContent></wps:txbx>`
+    // spAutoFit: the shape resizes to fit its single line of text, so Word AND
+    // LibreOffice never clip it (no red "text overflow" marker) and the mask fill
+    // hugs the text instead of over-painting neighbouring borders/graphics.
     + '<wps:bodyPr rot="0" vert="horz" wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" '
-    + 'anchor="t" anchorCtr="0"><a:noAutofit/></wps:bodyPr></wps:wsp></a:graphicData>';
+    + 'anchor="t" anchorCtr="0"><a:spAutoFit/></wps:bodyPr></wps:wsp></a:graphicData>';
 }
 
 /** A no-fill, thin-outline rectangle used to draw a table cell's borders. */

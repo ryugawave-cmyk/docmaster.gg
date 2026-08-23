@@ -58,6 +58,11 @@ const WORD_MODE_CARDS = [
     bestFor: ['Forms', 'Certificates', 'Invoices', 'Government Documents'],
   },
   {
+    id: 'ai', icon: 'sparkle', title: 'Smart (AI)',
+    desc: 'AI reads the whole page and rebuilds its text, tables, images and colours as editable content. Runs on your device; the first use downloads the model and takes a little longer.',
+    bestFor: ['Complex tables', 'Reports', 'Mixed layouts'],
+  },
+  {
     id: 'layout', icon: 'edit', title: 'Editable Layout',
     desc: 'Optimized for easy editing and content restructuring.',
     bestFor: ['Reports', 'Articles', 'Books', 'Notes'],
@@ -66,7 +71,6 @@ const WORD_MODE_CARDS = [
 // Power-user modes, tucked into a collapsed "Advanced options" disclosure so the
 // primary choice stays uncluttered. Same wiring/values as the cards.
 const WORD_MODE_ADVANCED = [
-  { id: 'ai', label: 'Smart Reconstruction', desc: 'Automatically rebuilds tables and paragraphs. Best for complex tables; takes a little longer.' },
   { id: 'editable', label: 'Plain Text', desc: 'Text only, images removed — easiest for heavy rewriting.' },
 ];
 
@@ -574,9 +578,14 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
         // PDF's own text fills them → real editable Word tables. Runs in a Worker;
         // first use downloads the model. Slower, but rebuilds true editable tables.
         if (settings.wordMode === 'ai') {
+          // Recover the page's baked-in pictures (signature/photo/QR/logo) so the AI
+          // rebuild can place them as real editable images. Best-effort → [] on fail.
+          setWorking('Recovering images…');
+          const extraImages = await extractBakedImages(model);
           setWorking('Loading AI model…');
           const blob = await convertToWordAI(model, {
             name: getDocName(),
+            extraImages,
             onProgress: (done, total, msg) => setWorking(msg || `Analysing pages… ${done}/${total}`),
           });
           setDone({ blob, filename: `${base}.docx` });
@@ -586,6 +595,9 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
         // true positions). We pre-erase the extracted glyphs from the raster so an
         // overlay box can't let the baked original bleed through in Google Docs.
         // Best-effort: masking failure just uses the original background.
+        // Exact reproduces each page 1:1 from the raster (which already carries every
+        // picture exactly), so it only needs the text-erased background — NOT recovered
+        // images, which are best-effort and could drop a blank crop over real text.
         let cleanBg = null;
         if (settings.wordMode === 'exact') {
           setWorking('Preparing pages…');
@@ -593,8 +605,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
         }
         // The Editable Layout rebuilds vector-side, so the PDF's baked-in images
         // (photo, signature, QR, logos) must be recovered from the page raster and
-        // placed as real pictures. Best-effort: recovery failure yields no images,
-        // never an error.
+        // placed as real pictures. Best-effort: recovery failure yields no images.
         let extraImages = null;
         if (settings.wordMode === 'layout') {
           setWorking('Recovering images…');

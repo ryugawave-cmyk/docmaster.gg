@@ -48,7 +48,10 @@ export async function convertToWordAI(model, opts = {}) {
   }
 
   report(total, 'Building Word document…');
-  return modelToDocx(model, { mode: 'ai', name: opts.name, aiPages });
+  // extraImages: baked-in pictures (signature/photo/QR/logo) recovered from the
+  // page raster by the caller, merged into each page so aiBody places them inline
+  // in reading order alongside the rebuilt text and tables.
+  return modelToDocx(model, { mode: 'ai', name: opts.name, aiPages, extraImages: opts.extraImages });
 }
 
 /** Render one page's raster to an ImageBitmap, hand it to the worker, get regions.

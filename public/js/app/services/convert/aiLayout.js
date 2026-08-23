@@ -77,6 +77,10 @@ function styleOf(runs) {
     italic: majority('italic'),
     color: pick('color', '111827'),
     font: pick('fontFamily', 'Calibri'),
+    // Sampled page colour behind the runs — lets the docx builder shade a coloured
+    // heading bar / banner / table cell (dark header, green "Success" strip) so the
+    // PDF's fills reappear as native, editable shading (near-white is skipped).
+    boxBg: pick('boxBg', ''),
   };
 }
 
