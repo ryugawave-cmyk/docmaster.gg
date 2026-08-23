@@ -41,6 +41,9 @@ export async function convertToWordAI(model, opts = {}) {
       console.info(`[DocMaster] AI layout — page ${i + 1}: ${regions.length} regions`,
         regions.reduce((m, r) => { m[r.type] = (m[r.type] || 0) + 1; return m; }, {}),
         outputDims ? `(model output dims ${JSON.stringify(outputDims)})` : '');
+      // Sample each region's background colour from the raster so coloured bars /
+      // banners (often white text on colour) are shaded in the rebuild.
+      await sampleRegionColors(pg, regions);
       aiPages[i] = { blocks: buildBlocksFromRegions(pg.runs, regions) };
     }
   } finally {
@@ -52,6 +55,61 @@ export async function convertToWordAI(model, opts = {}) {
   // page raster by the caller, merged into each page so aiBody places them inline
   // in reading order alongside the rebuilt text and tables.
   return modelToDocx(model, { mode: 'ai', name: opts.name, aiPages, extraImages: opts.extraImages });
+}
+
+/** Median colour (hex, no #) of a raster rectangle, or '' when it's near-white.
+ *  Median per channel is robust to the text pixels (a minority of the region). */
+function medianRegionHex(ctx, x, y, w, h) {
+  let data;
+  try { data = ctx.getImageData(x, y, w, h).data; } catch { return ''; }
+  const rs = [], gs = [], bs = [];
+  const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 2000))); // ~2k samples max
+  for (let yy = 0; yy < h; yy += step) {
+    for (let xx = 0; xx < w; xx += step) {
+      const i = (yy * w + xx) * 4;
+      if (data[i + 3] < 128) continue; // skip transparent
+      rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]);
+    }
+  }
+  if (!rs.length) return '';
+  const med = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
+  const r = med(rs), g = med(gs), b = med(bs);
+  if (r > 236 && g > 236 && b > 236) return ''; // near-white → no colour band
+  return [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+/** Attach `region.bg` = the region's sampled background colour from the page
+ *  raster (best-effort; leaves bg unset on any failure). */
+async function sampleRegionColors(pg, regions) {
+  if (!pg.bg || !regions.length || typeof OffscreenCanvas === 'undefined') return;
+  let bmp;
+  try {
+    let blob;
+    if (pg.bg.startsWith('data:')) {
+      const mime = (/^data:([^;,]+)/.exec(pg.bg) || [])[1] || 'image/jpeg';
+      blob = new Blob([dataURLToBytes(pg.bg)], { type: mime });
+    } else {
+      blob = await (await fetch(pg.bg)).blob();
+    }
+    bmp = await createImageBitmap(blob);
+  } catch { return; }
+  try {
+    const cvs = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = cvs.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    const sx = bmp.width / (pg.w || bmp.width);
+    const sy = bmp.height / (pg.h || bmp.height);
+    for (const reg of regions) {
+      if (!reg || !reg.box || reg.type === 'figure') continue;
+      const x = Math.max(0, Math.round(reg.box.x * sx));
+      const y = Math.max(0, Math.round(reg.box.y * sy));
+      const w = Math.min(bmp.width - x, Math.round(reg.box.w * sx));
+      const h = Math.min(bmp.height - y, Math.round(reg.box.h * sy));
+      if (w > 1 && h > 1) reg.bg = medianRegionHex(ctx, x, y, w, h);
+    }
+  } catch { /* sampling is best-effort */ } finally {
+    if (bmp && bmp.close) bmp.close();
+  }
 }
 
 /** Render one page's raster to an ImageBitmap, hand it to the worker, get regions.

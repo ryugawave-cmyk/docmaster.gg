@@ -216,8 +216,11 @@ export function buildTable(runs, box) {
 }
 
 /** Build a paragraph/heading block from the runs inside a text/title region.
- *  `box` (the region's bounds) lets us recover the on-page alignment. */
-export function buildParagraph(runs, type, box) {
+ *  `box` (the region's bounds) lets us recover the on-page alignment. `fallbackBg`
+ *  (the region's sampled background colour) shades a colour band when the runs
+ *  carry no fill — e.g. a dark header bar with white text, which would otherwise
+ *  be invisible (white on white) once rebuilt as a plain paragraph. */
+export function buildParagraph(runs, type, box, fallbackBg) {
   const rowTol = medianSize(runs, 'h') * 0.7;
   const rowCenters = clusterPositions(runs.map(cy), rowTol);
   const lines = rowCenters.map(() => []);
@@ -226,11 +229,13 @@ export function buildParagraph(runs, type, box) {
   const text = lines
     .map((ls) => ls.map((r) => (r.text || '').trim()).join(' '))
     .join('\n').replace(/[ \t]+/g, ' ').trim();
+  const style = styleOf(runs);
+  if (!style.boxBg && fallbackBg) style.boxBg = fallbackBg;
   return {
     kind: 'paragraph',
     text,
     heading: type === 'title' ? 1 : 0,
-    style: styleOf(runs),
+    style,
     align: alignOf(lines, box),
   };
 }
@@ -291,7 +296,12 @@ export function buildBlocksFromRegions(runs, regions) {
   const blocks = [];
   regs.forEach((reg, i) => {
     if (!buckets[i].length || reg2skip(reg)) return;
-    const b = reg.type === 'table' ? buildTable(buckets[i], reg.box) : buildParagraph(buckets[i], reg.type, reg.box);
+    // reg.bg (sampled by the caller from the page raster) shades colour bands in
+    // paragraphs. Not applied to tables — a table's cells have their own fills, so
+    // a single region colour would wrongly paint the whole grid.
+    const b = reg.type === 'table'
+      ? buildTable(buckets[i], reg.box)
+      : buildParagraph(buckets[i], reg.type, reg.box, reg.bg);
     b.y = reg.box.y; b.x = reg.box.x;
     blocks.push(b);
   });
