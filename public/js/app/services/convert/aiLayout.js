@@ -24,6 +24,8 @@
  * @typedef {{ text:string, x:number, y:number, w:number, h:number, fontSize?:number }} Run
  */
 
+import { reconstructPages } from './reconstruct.js';
+
 const cx = (r) => r.x + (r.w || 0) / 2;
 const cy = (r) => r.y + (r.h || 0) / 2;
 const inBox = (r, b) => cx(r) >= b.x && cx(r) <= b.x + b.w && cy(r) >= b.y && cy(r) <= b.y + b.h;
@@ -240,37 +242,24 @@ export function buildParagraph(runs, type, box, fallbackBg) {
   };
 }
 
-/** Tight bounding box of a set of runs. */
-function bboxOf(runs) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const r of runs) {
-    x0 = Math.min(x0, r.x); y0 = Math.min(y0, r.y);
-    x1 = Math.max(x1, r.x + (r.w || 0)); y1 = Math.max(y1, r.y + (r.h || 0));
-  }
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
-/** Runs that fell outside every detected region become paragraphs grouped by
- *  vertical gaps — so scattered stray text keeps its position and reading order
- *  instead of collapsing into one block dumped at the end of the document. */
-function leftoverParagraphs(runs) {
-  if (!runs.length) return [];
-  const lineH = medianSize(runs, 'h');
-  const sorted = runs.slice().sort((a, b) => cy(a) - cy(b) || a.x - b.x);
-  const groups = [];
-  let cur = null, prevY = null;
-  for (const r of sorted) {
-    const y = cy(r);
-    if (cur && prevY != null && y - prevY <= lineH * 1.8) cur.push(r);
-    else { cur = [r]; groups.push(cur); }
-    prevY = y;
-  }
-  return groups.map((g) => {
-    const box = bboxOf(g);
-    const p = buildParagraph(g, 'text', box);
-    p.y = box.y; p.x = box.x;
-    return p;
-  });
+/**
+ * Rebuild the runs that fell outside every (non-figure) region into ordered,
+ * editable blocks with the pure-geometry engine (reconstruct.js) — the same
+ * detector the non-AI "editable layout" uses. This is what RECOVERS a whole form
+ * the layout model wrongly dropped into a figure: those runs arrive here and
+ * become a REAL aligned table plus paragraphs, not a flat text dump. Blocks are
+ * tagged `geom:true` so the docx builder renders them with the reconstruct-native
+ * table/paragraph helpers (which already carry per-cell widths, spans and styling).
+ */
+function reconstructLeftovers(runs) {
+  const clean = (runs || []).filter((r) => r && r.text && String(r.text).trim());
+  if (!clean.length) return [];
+  let w = 0, h = 0;
+  for (const r of clean) { w = Math.max(w, r.x + (r.w || 0)); h = Math.max(h, r.y + (r.h || 0)); }
+  const page = reconstructPages({ pages: [{ index: 0, w: w + 40, h: h + 40, runs: clean, images: [] }] })[0];
+  return (page && page.blocks ? page.blocks : []).map((b) => (b.type === 'table'
+    ? { kind: 'table', geom: true, cols: b.cols, rows: b.rows, left: b.left || 0, x: b.left || 0, y: b._y || 0 }
+    : { kind: 'paragraph', geom: true, type: b.type, text: b.text, style: b.style, align: b.align, x: b.x || 0, y: b._y || 0 }));
 }
 
 /**
@@ -289,7 +278,16 @@ export function buildBlocksFromRegions(runs, regions) {
   for (const run of (runs || [])) {
     if (!run || !run.text || !String(run.text).trim()) continue;
     let hit = -1;
-    for (let i = 0; i < regs.length; i += 1) if (inBox(run, regs[i].box)) { hit = i; break; }
+    for (let i = 0; i < regs.length; i += 1) {
+      // A `figure` region holds a picture, not text. If the layout model mislabels
+      // a dense form/table as a figure (common for bordered admit-cards carrying a
+      // photo, seal and barcode), it must NOT swallow the text runs inside it: they
+      // used to be bucketed here and then DROPPED when the figure was skipped below,
+      // deleting the whole form. Skip figures so their runs fall through to the
+      // geometry reconstruction (reconstructLeftovers) and are rebuilt as a table.
+      if (regs[i].type === 'figure') continue;
+      if (inBox(run, regs[i].box)) { hit = i; break; }
+    }
     if (hit >= 0) buckets[hit].push(run); else leftovers.push(run);
   }
 
@@ -305,7 +303,7 @@ export function buildBlocksFromRegions(runs, regions) {
     b.y = reg.box.y; b.x = reg.box.x;
     blocks.push(b);
   });
-  blocks.push(...leftoverParagraphs(leftovers));
+  blocks.push(...reconstructLeftovers(leftovers));
 
   // Reading order: honour explicit region `order` first, else top-to-bottom then
   // left-to-right by position. Interleaving (not appending) fixes headings/notes

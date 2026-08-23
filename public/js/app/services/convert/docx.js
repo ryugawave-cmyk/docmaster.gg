@@ -320,8 +320,11 @@ function aiBody(content, aiPages, addImage) {
       .sort((a, b) => (a.y || 0) - (b.y || 0) || (a.x || 0) - (b.x || 0));
 
     for (const b of stream) {
-      if (b && b.kind === 'table') parts.push(tableXml(aiTableToTbl(b, innerW)));
-      else if (b && b.kind === 'paragraph') parts.push(styledPara(aiParaToBlock(b)));
+      // `geom` blocks come from the geometry recovery (aiLayout.reconstructLeftovers)
+      // and are already in reconstruct-native shape, so they go straight to the
+      // shared table/paragraph builders; the AI-region blocks are converted first.
+      if (b && b.kind === 'table') parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW)));
+      else if (b && b.kind === 'paragraph') parts.push(styledPara(b.geom ? b : aiParaToBlock(b)));
       else if (b && b.kind === 'image') parts.push(inlineImageParagraph(b, addImage));
     }
     if (!stream.length) parts.push('<w:p/>');
@@ -341,6 +344,17 @@ function aiBody(content, aiPages, addImage) {
 }
 
 function clampSpan(n) { const v = parseInt(n, 10); return !(v >= 1) ? 1 : Math.min(v, 10); }
+
+/** A geometry-recovered table carries the PDF's own pixel column widths, which can
+ *  be as wide as the whole page and overflow the AI layout's page margins. Scale the
+ *  columns down to the printable width (and drop the left indent) so the rebuilt form
+ *  fits the page instead of running off the right edge. */
+function fitCols(tbl, innerW) {
+  const sum = (tbl.cols || []).reduce((s, w) => s + (w || 0), 0);
+  if (!sum || sum <= innerW) return tbl;
+  const k = innerW / sum;
+  return { ...tbl, left: 0, cols: tbl.cols.map((w) => Math.max(24, Math.round((w || 0) * k))) };
+}
 
 /** aiLayout `table` block (rows = array of arrays of {text,colSpan}) → tableXml shape. */
 function aiTableToTbl(b, innerW) {
