@@ -24,7 +24,7 @@
  * @typedef {{ text:string, x:number, y:number, w:number, h:number, fontSize?:number }} Run
  */
 
-import { reconstructPages } from './reconstruct.js';
+import { reconstructPages, runsToContentLines } from './reconstruct.js';
 
 const cx = (r) => r.x + (r.w || 0) / 2;
 const cy = (r) => r.y + (r.h || 0) / 2;
@@ -210,6 +210,9 @@ export function buildTable(runs, box) {
   }
   const rows = grid.map((row) => row.map((cellRuns, ci) => ({
     text: cellText(cellRuns),
+    // Content lines route complex-script crops to images and keep English editable;
+    // the plain `text` above stays as a fallback for readers that ignore `lines`.
+    lines: runsToContentLines(cellRuns),
     colSpan: 1,
     style: cellRuns.length ? styleOf(cellRuns) : null,
     align: cellRuns.length ? alignOf([cellRuns], { x: left[ci], w: Math.max(1, right[ci] - left[ci]) }) : 'left',
@@ -236,6 +239,7 @@ export function buildParagraph(runs, type, box, fallbackBg) {
   return {
     kind: 'paragraph',
     text,
+    lines: runsToContentLines(runs),
     heading: type === 'title' ? 1 : 0,
     style,
     align: alignOf(lines, box),
@@ -259,7 +263,7 @@ function reconstructLeftovers(runs) {
   const page = reconstructPages({ pages: [{ index: 0, w: w + 40, h: h + 40, runs: clean, images: [] }] })[0];
   return (page && page.blocks ? page.blocks : []).map((b) => (b.type === 'table'
     ? { kind: 'table', geom: true, cols: b.cols, rows: b.rows, left: b.left || 0, x: b.left || 0, y: b._y || 0 }
-    : { kind: 'paragraph', geom: true, type: b.type, text: b.text, style: b.style, align: b.align, x: b.x || 0, y: b._y || 0 }));
+    : { kind: 'paragraph', geom: true, type: b.type, text: b.text, lines: b.lines, style: b.style, align: b.align, x: b.x || 0, y: b._y || 0 }));
 }
 
 /**

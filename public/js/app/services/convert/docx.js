@@ -171,9 +171,9 @@ function faithfulBody(content, addImage) {
     const imgBlocks = [];
     const flow = [];
     for (const b of pg.blocks) {
-      if (b.type === 'table') flow.push(tableXml(b));
+      if (b.type === 'table') flow.push(tableXml(b, addImage));
       else if (b.type === 'image') imgBlocks.push(b);
-      else flow.push(styledPara(b));
+      else flow.push(styledPara(b, addImage));
     }
     // Images as FLOATING, page-anchored drawings at their exact PDF position and
     // size — a logo, barcode, photo or signature stays pinned where it belongs,
@@ -213,9 +213,38 @@ function shd(color) {
   return `<w:shd w:val="clear" w:color="auto" w:fill="${h}"/>`;
 }
 
+let cropUid = 900000; // docPr ids for inline cropped-script images (unique per doc)
+
+/** One inline image run: a complex-script segment rasterised from the page (see
+ *  aiWordConvert) so it renders correctly where editable Unicode would scramble. */
+function inlineImageRun(im, addImage) {
+  if (!addImage || !im || !im.src) return '';
+  const rId = addImage(im.src);
+  const w = EMU(im.w || 20), h = EMU(im.h || 12);
+  const id = cropUid++;
+  return '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
+    + `<wp:extent cx="${w}" cy="${h}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>`
+    + `<wp:docPr id="${id}" name="crop${id}"/><wp:cNvGraphicFramePr/>`
+    + `<a:graphic xmlns:a="${A_NS}">${pictureGraphic(im.w || 20, im.h || 12, rId, id)}</a:graphic>`
+    + '</wp:inline></w:drawing></w:r>';
+}
+
+/** Render content lines (see reconstruct.runsToContentLines) as a paragraph body:
+ *  lines stack via <w:br/>; tokens within a line are inline (image runs or text). */
+function renderContent(lines, rpr, addImage) {
+  return (lines || []).map((toks, i) => {
+    const br = i ? `<w:r>${rpr}<w:br/></w:r>` : '';
+    const body = (toks || []).map((t) => (t.img
+      ? inlineImageRun(t.img, addImage)
+      : textRuns(t.text, rpr))).join('');
+    return br + body;
+  }).join('');
+}
+
 /** A styled heading/paragraph, preserving size/weight/italic/colour/alignment,
- *  left indent, and a coloured bar (paragraph shading) when the run sat on one. */
-function styledPara(b) {
+ *  left indent, and a coloured bar (paragraph shading) when the run sat on one.
+ *  `b.lines` (image/text tokens) take precedence over the plain `b.text`. */
+function styledPara(b, addImage) {
   const st = b.style || {};
   const shading = shd(st.boxBg);
   const jc = b.align === 'center' ? '<w:jc w:val="center"/>'
@@ -228,12 +257,13 @@ function styledPara(b) {
     bold: st.bold || b.type === 'heading', italic: st.italic,
     size: SZHP(st.size || 16), color: st.color, font: st.font,
   });
+  const body = (b.lines && b.lines.length) ? renderContent(b.lines, rpr, addImage) : textRuns(b.text, rpr);
   return `<w:p><w:pPr><w:spacing w:before="${before}" w:after="${after}"/>${shading}${jc}${ind}</w:pPr>`
-    + textRuns(b.text, rpr) + '</w:p>';
+    + body + '</w:p>';
 }
 
 /** Emit a detected grid as a real Word table (editable cells, borders, spans). */
-function tableXml(tbl) {
+function tableXml(tbl, addImage) {
   const n = tbl.cols.length;
   const grid = tbl.cols.map((w) => `<w:gridCol w:w="${TW(w)}"/>`).join('');
   const totalTw = tbl.cols.reduce((s, w) => s + TW(w), 0);
@@ -250,7 +280,7 @@ function tableXml(tbl) {
 
   const rows = tbl.rows.map((cells) => {
     let covered = 0;
-    const tcs = cells.map((c) => { covered += c.span; return cellXml(c, tbl.cols); }).join('');
+    const tcs = cells.map((c) => { covered += c.span; return cellXml(c, tbl.cols, addImage); }).join('');
     let pad = '';
     if (covered < n) {
       const wsum = sumCols(tbl.cols, covered, n - covered);
@@ -265,7 +295,7 @@ function tableXml(tbl) {
     + '<w:p><w:pPr><w:spacing w:after="60"/></w:pPr></w:p>';
 }
 
-function cellXml(c, cols) {
+function cellXml(c, cols, addImage) {
   const wsum = sumCols(cols, c.colStart, c.span);
   const st = c.style || {};
   const jc = c.align === 'center' ? '<w:jc w:val="center"/>'
@@ -274,8 +304,10 @@ function cellXml(c, cols) {
     bold: st.bold, italic: st.italic, size: SZHP(st.size || 14),
     color: st.color, font: st.font,
   });
+  const body = (c.lines && c.lines.length) ? renderContent(c.lines, rpr, addImage)
+    : (c.text ? textRuns(c.text, rpr) : '');
   const para = `<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>`
-    + (c.text ? textRuns(c.text, rpr) : '') + '</w:p>';
+    + body + '</w:p>';
   const span = c.span > 1 ? `<w:gridSpan w:val="${c.span}"/>` : '';
   return `<w:tc><w:tcPr><w:tcW w:w="${wsum}" w:type="dxa"/>${span}${shd(st.boxBg)}<w:vAlign w:val="center"/></w:tcPr>${para}</w:tc>`;
 }
@@ -332,8 +364,8 @@ function aiBody(content, aiPages, addImage) {
       // `geom` blocks come from the geometry recovery (aiLayout.reconstructLeftovers)
       // and are already in reconstruct-native shape, so they go straight to the
       // shared table/paragraph builders; the AI-region blocks are converted first.
-      if (b && b.kind === 'table') parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW)));
-      else if (b && b.kind === 'paragraph') parts.push(styledPara(b.geom ? b : aiParaToBlock(b)));
+      if (b && b.kind === 'table') parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW), addImage));
+      else if (b && b.kind === 'paragraph') parts.push(styledPara(b.geom ? b : aiParaToBlock(b), addImage));
     }
     if (!blocks.length && !imgs.length) parts.push('<w:p/>');
 
@@ -386,7 +418,7 @@ function aiTableToTbl(b, innerW) {
       // the PDF runs; fall back to a plain body cell only when the cell was empty.
       const style = (c && c.style) ? c.style : { bold: false, size: 14 };
       const align = (c && c.align) ? c.align : 'left';
-      out.push({ text: (c && c.text != null) ? String(c.text) : '', span, colStart, align, style });
+      out.push({ text: (c && c.text != null) ? String(c.text) : '', lines: c && c.lines, span, colStart, align, style });
       colStart += span;
     }
     return out;
@@ -405,6 +437,7 @@ function aiParaToBlock(b) {
   return {
     type: isHeading ? 'heading' : 'paragraph',
     text: b.text != null ? String(b.text) : '',
+    lines: b.lines,
     align: b.align || 'left', x: 0,
     style: {
       bold: st.bold || isHeading,

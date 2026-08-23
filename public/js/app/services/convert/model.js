@@ -232,7 +232,10 @@ export function coalesceLineRuns(runs) {
   const out = [];
   for (const r of runs) {
     const prev = out[out.length - 1];
-    if (prev) {
+    // A crop-run (complex-script segment rasterised into an image, see aiWordConvert)
+    // must never fuse with a neighbour: merging would concatenate text and drop the
+    // cropSrc, scrambling the very script we cropped to preserve.
+    if (prev && !prev.cropSrc && !r.cropSrc) {
       const fs = Math.max(prev.fontSize || 12, r.fontSize || 12);
       const gap = r.x - (prev.x + (prev.w || 0));
       // A column separator is a gap wider than ~1.2 em; anything tighter belongs

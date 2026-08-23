@@ -13,7 +13,7 @@
  * the exact text + cell contents come from the PDF, so characters are never
  * guessed. Pages are processed one at a time with progress.
  */
-import { buildContentModel } from './model.js';
+import { buildContentModel, hasComplexScript } from './model.js';
 import { modelToDocx } from './docx.js';
 import { buildBlocksFromRegions } from './aiLayout.js';
 import { dataURLToBytes } from '../zip.js';
@@ -44,7 +44,11 @@ export async function convertToWordAI(model, opts = {}) {
       // Sample each region's background colour from the raster so coloured bars /
       // banners (often white text on colour) are shaded in the rebuild.
       await sampleRegionColors(pg, regions);
-      aiPages[i] = { blocks: buildBlocksFromRegions(pg.runs, regions) };
+      // Rasterise complex-script (Devanagari etc.) runs into inline image crops so
+      // they render correctly instead of scrambling as editable Unicode; Latin text
+      // and values stay editable. Best-effort — falls back to the raw runs.
+      const runsForLayout = await cropComplexRuns(pg);
+      aiPages[i] = { blocks: buildBlocksFromRegions(runsForLayout, regions) };
     }
   } finally {
     worker.terminate();
@@ -108,6 +112,99 @@ async function sampleRegionColors(pg, regions) {
       if (w > 1 && h > 1) reg.bg = medianRegionHex(ctx, x, y, w, h);
     }
   } catch { /* sampling is best-effort */ } finally {
+    if (bmp && bmp.close) bmp.close();
+  }
+}
+
+/** Blob → data: URL (main thread). */
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Replace complex-script runs with CROP runs: rasterise each contiguous
+ * complex-script segment (Devanagari/Bengali/Tamil… — see hasComplexScript) from
+ * the page image and hand it downstream as an inline image, so the script renders
+ * exactly as in the PDF instead of scrambling when re-emitted as editable Unicode
+ * (detached matras, dropped conjuncts). Latin text and numeric values are left as
+ * editable runs. Best-effort: no raster / no OffscreenCanvas / decode failure →
+ * the runs are returned unchanged (so those runs stay editable text, scrambled or
+ * not, rather than vanishing).
+ * @returns {Promise<object[]>} the run list to feed the layout engine
+ */
+async function cropComplexRuns(pg) {
+  const src = pg.runs || [];
+  const isComplex = (r) => !!(r && r.text && hasComplexScript(r.text));
+  if (!pg.bg || typeof OffscreenCanvas === 'undefined' || !src.some(isComplex)) return src;
+
+  let bmp;
+  try {
+    let blob;
+    if (pg.bg.startsWith('data:')) {
+      const mime = (/^data:([^;,]+)/.exec(pg.bg) || [])[1] || 'image/jpeg';
+      blob = new Blob([dataURLToBytes(pg.bg)], { type: mime });
+    } else {
+      blob = await (await fetch(pg.bg)).blob();
+    }
+    bmp = await createImageBitmap(blob);
+  } catch { return src; }
+
+  try {
+    const sx = bmp.width / (pg.w || bmp.width);
+    const sy = bmp.height / (pg.h || bmp.height);
+    // Group complex runs into contiguous, same-baseline segments (one image each).
+    const segs = [];
+    for (const r of src.filter(isComplex).sort((a, b) => a.y - b.y || a.x - b.x)) {
+      const fs = r.fontSize || r.h || 12;
+      const last = segs[segs.length - 1];
+      const sameLine = last && Math.abs(r.y - last.y) <= Math.min(last.h, r.h || 0) * 0.6;
+      if (last && sameLine && (r.x - last.right) <= fs * 1.2) {
+        last.runs.push(r);
+        last.right = Math.max(last.right, r.x + (r.w || 0));
+        last.y = Math.min(last.y, r.y);
+        last.h = Math.max(last.h, r.h || 0);
+      } else {
+        segs.push({ runs: [r], x: r.x, y: r.y, right: r.x + (r.w || 0), h: r.h || 0 });
+      }
+    }
+
+    const cvs = new OffscreenCanvas(1, 1);
+    const ctx = cvs.getContext('2d', { willReadFrequently: true });
+    const cropRuns = [];
+    for (const seg of segs) {
+      const pad = Math.max(1, Math.round((seg.h || 12) * 0.18)); // keep matras/descenders
+      const px = Math.max(0, Math.round((seg.x - pad) * sx));
+      const py = Math.max(0, Math.round((seg.y - pad) * sy));
+      const pw = Math.min(bmp.width - px, Math.round((seg.right - seg.x + pad * 2) * sx));
+      const ph = Math.min(bmp.height - py, Math.round((seg.h + pad * 2) * sy));
+      if (pw < 1 || ph < 1) continue;
+      cvs.width = pw; cvs.height = ph;
+      ctx.clearRect(0, 0, pw, ph);
+      ctx.drawImage(bmp, px, py, pw, ph, 0, 0, pw, ph);
+      let cropSrc = '';
+      try { cropSrc = await blobToDataURL(await cvs.convertToBlob({ type: 'image/png' })); } catch { cropSrc = ''; }
+      if (!cropSrc) continue;
+      const lead = seg.runs[0];
+      const w = (seg.right - seg.x) + pad * 2;
+      const h = seg.h + pad * 2;
+      cropRuns.push({
+        text: seg.runs.map((r) => r.text).join(''),
+        x: seg.x - pad, y: seg.y - pad, w, h,
+        cropSrc, cropW: w, cropH: h,
+        fontSize: lead.fontSize, bold: lead.bold, italic: lead.italic,
+        color: lead.color, align: lead.align,
+      });
+    }
+    if (!cropRuns.length) return src;
+    return src.filter((r) => !isComplex(r)).concat(cropRuns);
+  } catch {
+    return src;
+  } finally {
     if (bmp && bmp.close) bmp.close();
   }
 }

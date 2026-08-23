@@ -181,20 +181,98 @@ function nearestCol(cols, x) {
   return bestD <= 24 ? best : (x >= cols[cols.length - 1] - 24 ? cols.length - 1 : best);
 }
 
-/** Build a table block: assign each row's cells to columns, compute spans. */
+/**
+ * Group a set of runs (one table cell, or one text block) into ordered CONTENT
+ * LINES so mixed script/image content survives: each line is a list of tokens,
+ * a token is either editable `{text}` or an `{img}` rasterised from the page (a
+ * complex-script segment cropped by aiWordConvert — Devanagari etc. that can't be
+ * re-emitted as correct Unicode). Runs stack top-to-bottom by baseline and read
+ * left-to-right by x within a baseline, so a bilingual cell keeps its Hindi image
+ * ABOVE the English text, and an inline "हिन्दी / English" title keeps them side
+ * by side. Adjacent text runs join with a single space; crop-runs stay atomic.
+ * @returns {{img?:{src,w,h}, text?:string}[][]}
+ */
+export function runsToContentLines(runs) {
+  const sorted = (runs || []).slice().sort((a, b) => a.y - b.y || a.x - b.x);
+  const groups = [];
+  for (const r of sorted) {
+    const last = groups[groups.length - 1];
+    const tol = Math.min(r.h || 0, last ? last.h : (r.h || 0)) * 0.6;
+    if (last && Math.abs(r.y - last.y) <= tol) { last.runs.push(r); last.h = Math.max(last.h, r.h || 0); }
+    else groups.push({ y: r.y, h: r.h || 0, runs: [r] });
+  }
+  return groups.map((g) => {
+    g.runs.sort((a, b) => a.x - b.x);
+    const toks = [];
+    for (const r of g.runs) {
+      if (r.cropSrc) { toks.push({ img: { src: r.cropSrc, w: r.cropW || r.w || 20, h: r.cropH || r.h || 12 } }); continue; }
+      const t = String(r.text == null ? '' : r.text).replace(/\n/g, ' ').trim();
+      if (!t) continue;
+      const prev = toks[toks.length - 1];
+      if (prev && prev.text != null) prev.text += ` ${t}`;
+      else toks.push({ text: t });
+    }
+    return toks;
+  }).filter((toks) => toks.length);
+}
+
+/** Cell content from the runs that landed in one column: ordered lines (image/text
+ *  tokens) plus the styling/alignment of its leading editable run. */
+function cellContent(runs) {
+  const lines = runsToContentLines(runs);
+  const lead = runs.find((r) => !r.cropSrc) || runs[0];
+  // Plain-text fallback (editable tokens only — never the scrambled cropped script)
+  // for any reader/path that ignores `lines`.
+  const text = lines.map((toks) => toks.filter((t) => t.text != null).map((t) => t.text).join(' ')).join(' ').trim();
+  return { lines, text, style: styleOf(lead), align: (lead && lead.align) || 'left' };
+}
+
+/**
+ * Merge vertically-stacked sub-rows into one form-row. A bilingual admit-card row
+ * is really ONE cell holding a Hindi line ABOVE an English line (with the value on
+ * the same baseline as the first) — but baseline grouping splits it into two rows,
+ * the second with empty value cells. We fold a line into the row above it when its
+ * occupied columns are a STRICT SUBSET of that row's (it adds no new column, i.e.
+ * it's a label continuation, not a fresh data row) and it sits directly beneath it.
+ * @returns {object[][]} each form-row as its combined list of cell-runs
+ */
+function mergeStackedRows(band, cols) {
+  const colsOf = (cells) => new Set(cells.map((c) => Math.max(0, nearestCol(cols, c.x))));
+  const rows = [];
+  for (const ln of band) {
+    const prev = rows[rows.length - 1];
+    if (prev) {
+      const gap = ln.top - prev.bottom;
+      const lineH = Math.min(prev.h || 12, ln.h || 12);
+      const bCols = colsOf(ln.cells);
+      const subset = [...bCols].every((c) => prev.colSet.has(c));
+      if (subset && bCols.size < prev.colSet.size && gap <= lineH * 1.2) {
+        prev.cells = prev.cells.concat(ln.cells);
+        prev.bottom = Math.max(prev.bottom, ln.bottom);
+        prev.h = Math.max(prev.h, ln.h);
+        for (const c of bCols) prev.colSet.add(c);
+        continue;
+      }
+    }
+    rows.push({ cells: ln.cells.slice(), top: ln.top, bottom: ln.bottom, h: ln.h, colSet: colsOf(ln.cells) });
+  }
+  return rows.map((r) => r.cells);
+}
+
+/** Build a table block: merge stacked bilingual sub-rows, assign each row's cells to
+ *  columns, compute spans. Cells carry content lines (text + cropped-script images). */
 function buildTable(band, pageW) {
   const cols = clusterColumns(band);
   const n = cols.length;
   const colRight = cols.map((x, i) => (i < n - 1 ? cols[i + 1] : Math.max(pageW, x + 40)));
   const widths = cols.map((x, i) => Math.max(24, Math.round(colRight[i] - x)));
 
-  const rows = band.map((ln) => {
+  const rows = mergeStackedRows(band, cols).map((rowCells) => {
     const slots = new Array(n).fill(null);
-    for (const c of ln.cells) {
+    for (const c of rowCells) {
       let ci = nearestCol(cols, c.x);
       if (ci < 0) ci = 0;
-      if (slots[ci]) slots[ci].run = mergeCellRuns(slots[ci].run, c);
-      else slots[ci] = { run: c };
+      (slots[ci] || (slots[ci] = [])).push(c);
     }
     // Turn occupied slots into cells with a gridSpan reaching the next occupant.
     const cells = [];
@@ -203,16 +281,12 @@ function buildTable(band, pageW) {
       if (!slots[ci]) { ci += 1; continue; }
       let span = 1;
       while (ci + span < n && !slots[ci + span]) span += 1;
-      const r = slots[ci].run;
-      cells.push({
-        text: r.text, style: styleOf(r), align: r.align || 'left',
-        colStart: ci, span,
-      });
+      cells.push({ ...cellContent(slots[ci]), colStart: ci, span });
       ci += span;
     }
     // Pad a leading empty column so cells keep their horizontal position.
     if (cells.length && cells[0].colStart > 0) {
-      cells.unshift({ text: '', style: {}, align: 'left', colStart: 0, span: cells[0].colStart });
+      cells.unshift({ lines: [], style: {}, align: 'left', colStart: 0, span: cells[0].colStart });
     }
     return cells;
   });
@@ -220,30 +294,28 @@ function buildTable(band, pageW) {
   return { type: 'table', cols: widths, rows, left: Math.round(cols[0]) };
 }
 
-function mergeCellRuns(a, b) {
-  // Two runs landed in the same column (wrapped value / split label): join text.
-  return { ...a, text: `${a.text} ${b.text}`.replace(/\s+/g, ' ').trim() };
-}
-
 /* ------------------------------ text blocks ----------------------------- */
 
 function buildTextBlock(line, bodySize) {
   line.cells.sort((a, b) => a.x - b.x);
-  const text = line.cells.map((c) => c.text.replace(/\n/g, ' ')).join('  ').replace(/\s+/g, ' ').trim();
-  const lead = line.cells[0];
-  const size = Math.max(...line.cells.map((c) => c.fontSize));
+  const lines = runsToContentLines(line.cells);
+  const plain = lines
+    .map((toks) => toks.filter((t) => t.text != null).map((t) => t.text).join(' '))
+    .join(' ').replace(/\s+/g, ' ').trim();
+  const lead = line.cells.find((c) => !c.cropSrc) || line.cells[0];
+  const size = Math.max(...line.cells.map((c) => c.fontSize || 0));
   const bold = line.cells.every((c) => c.bold);
   const style = styleOf({ ...lead, fontSize: size, bold });
-  const align = lead.align || 'left';
+  const align = (lead && lead.align) || 'left';
 
   const isHeading = (size >= bodySize * 1.3 || (bold && size >= bodySize * 1.08)
-    || isColoured(lead.color)) && text.length <= 140 && line.cells.length <= 3;
-  const x = Math.round(lead.x || 0);
+    || isColoured(lead && lead.color)) && plain.length <= 140 && line.cells.length <= 3;
+  const x = Math.round((lead && lead.x) || 0);
   if (isHeading) {
     const level = size >= bodySize * 1.8 ? 1 : size >= bodySize * 1.4 ? 2 : 3;
-    return { type: 'heading', text, style, align, level, x };
+    return { type: 'heading', text: plain, lines, style, align, level, x };
   }
-  return { type: 'paragraph', text, style, align, x };
+  return { type: 'paragraph', text: plain, lines, style, align, x };
 }
 
 const styleOf = (r) => ({
