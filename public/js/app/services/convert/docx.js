@@ -31,6 +31,12 @@ const DOC_NS = [
   'xmlns:v="urn:schemas-microsoft-com:vml"',
   'xmlns:o="urn:schemas-microsoft-com:office:office"',
   'xmlns:w10="urn:schemas-microsoft-com:office:word"',
+  // Markup Compatibility + the wps prefix so Exact-mode text boxes can be emitted
+  // as <mc:AlternateContent>: a wps Choice (modern DrawingML text box, used by
+  // Word 2010+, LibreOffice and Google Docs) with a legacy VML <mc:Fallback> that
+  // Word-2007-era readers — and some Word text-editing paths — use instead.
+  'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"',
+  'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"',
 ].join(' ');
 
 /**
@@ -450,7 +456,7 @@ function absoluteBody(content, addImage, cleanBg) {
         // spAutoFit (in lineTextboxGraphic) then grows it just enough to fit text.
         const w = Math.max(seg.right - seg.x, fs * 0.5);
         const h = Math.max(seg.h || 0, fs * 1.3);
-        anchors.push(anchor(seg.x, seg.top, w, h, z++, lineTextboxGraphic(w, h, seg)));
+        anchors.push(textboxAnchor(seg.x, seg.top, w, h, z++, seg));
       }
     } else {
       // 1) Table cell borders first (drawn behind text/images).
@@ -471,7 +477,7 @@ function absoluteBody(content, addImage, cleanBg) {
         const fs = seg.parts[0].run.fontSize || 14;
         const w = (seg.right - seg.x) + fs * 1.4;
         const h = Math.max(seg.h || 0, fs * 1.25) + 2;
-        anchors.push(anchor(seg.x, seg.top, w, h, z++, lineTextboxGraphic(w, h, seg)));
+        anchors.push(textboxAnchor(seg.x, seg.top, w, h, z++, seg));
       }
     }
 
@@ -573,12 +579,11 @@ function anchor(x, y, w, h, id, graphicData, behind = false) {
     + '</wp:anchor></w:drawing>';
 }
 
-/** An editable text box holding ONE line-segment: the segment's words emitted as
- *  separate styled runs in a single paragraph, so per-word bold/colour/size survive
- *  while the whole line edits as a unit. `seg.bg` (6-hex, no #) fills the box to
- *  mask the same text baked into the page raster beneath it; empty → transparent. */
-function lineTextboxGraphic(w, h, seg) {
-  const W = EMU(w), H = EMU(h);
+/** The txbxContent paragraph for one line-segment: its words emitted as separate
+ *  styled runs in a single paragraph, so per-word bold/colour/size survive while
+ *  the whole line edits as a unit. Shared by the DrawingML (wps) box and its VML
+ *  fallback so both readers get identical text. */
+function segParagraph(seg) {
   const first = seg.parts[0].run;
   const jc = first.align === 'center' ? '<w:jc w:val="center"/>'
     : first.align === 'right' ? '<w:jc w:val="right"/>' : '';
@@ -590,9 +595,54 @@ function lineTextboxGraphic(w, h, seg) {
     const t = (space ? ' ' : '') + String(run.text == null ? '' : run.text).replace(/\n/g, ' ');
     return '<w:r>' + rpr + `<w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
   }).join('');
+  return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>${runsXml}</w:p>`;
+}
+
+/**
+ * An editable text-box overlay for ONE line-segment, wrapped so BOTH the modern
+ * DrawingML text box and a legacy VML text box are available and Word gets a
+ * genuine, double-click-editable box:
+ *   • <mc:Choice Requires="wps"> — the DrawingML/wps box (Word 2010+, LibreOffice,
+ *     Google Docs). Positioning/masking identical to before.
+ *   • <mc:Fallback> — a VML <v:rect>/<v:textbox> at the same page coordinates, for
+ *     readers that don't understand wps (older Word, some editing paths).
+ * The `id` drives both z-order (relativeHeight / VML z-index).
+ */
+function textboxAnchor(x, y, w, h, id, seg) {
+  return '<mc:AlternateContent>'
+    + `<mc:Choice Requires="wps">${anchor(x, y, w, h, id, lineTextboxGraphic(w, h, seg))}</mc:Choice>`
+    + `<mc:Fallback>${vmlTextbox(x, y, w, h, id, seg)}</mc:Fallback>`
+    + '</mc:AlternateContent>';
+}
+
+/** Legacy VML text box (fallback for the wps box). <v:rect> is a built-in VML
+ *  shape (no <v:shapetype> needed) placed at absolute page coordinates in points;
+ *  `seg.bg` fills it to mask the raster glyphs beneath, empty → unfilled. */
+function vmlTextbox(x, y, w, h, id, seg) {
+  const para = segParagraph(seg);
+  const hex = normHex(seg.bg);
+  const fillAttr = hex ? ` fillcolor="#${hex}"` : ' filled="f"';
+  const style = 'position:absolute;'
+    + `margin-left:${PT(Math.max(0, x))}pt;margin-top:${PT(Math.max(0, y))}pt;`
+    + `width:${PT(w)}pt;height:${PT(h)}pt;z-index:${id};`
+    + 'mso-position-horizontal-relative:page;mso-position-vertical-relative:page';
+  return '<w:pict>'
+    + `<v:rect id="obj${id}" o:spid="_x0000_s${1000 + id}" style="${style}"${fillAttr} stroked="f">`
+    // inset 0 + fit-shape-to-text mirrors the wps box's zero insets + spAutoFit.
+    + '<v:textbox inset="0,0,0,0" style="mso-fit-shape-to-text:t">'
+    + `<w:txbxContent>${para}</w:txbxContent>`
+    + '</v:textbox></v:rect></w:pict>';
+}
+
+/** An editable text box holding ONE line-segment: the segment's words emitted as
+ *  separate styled runs in a single paragraph, so per-word bold/colour/size survive
+ *  while the whole line edits as a unit. `seg.bg` (6-hex, no #) fills the box to
+ *  mask the same text baked into the page raster beneath it; empty → transparent. */
+function lineTextboxGraphic(w, h, seg) {
+  const W = EMU(w), H = EMU(h);
+  const para = segParagraph(seg);
   const hex = normHex(seg.bg);
   const fill = hex ? `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>` : '<a:noFill/>';
-  const para = `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>${runsXml}</w:p>`;
   return `<a:graphicData uri="${WPS_NS}"><wps:wsp xmlns:wps="${WPS_NS}"><wps:cNvSpPr txBox="1"/>`
     + `<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${W}" cy="${H}"/></a:xfrm>`
     + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}<a:ln><a:noFill/></a:ln></wps:spPr>`
