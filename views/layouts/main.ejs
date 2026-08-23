@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('../partials/head') %>
+  <%- style %>
+</head>
+<body class="<%= currentPath === '/' ? 'page-home' : '' %>">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <%- include('../partials/header') %>
+
+  <main id="main">
+    <%- body %>
+  </main>
+
+  <%- include('../partials/footer') %>
+
+  <% if (features && features.cookieConsent) { %>
+    <%- include('../partials/cookie-consent') %>
+  <% } %>
+
+  <script src="/js/main.js" defer></script>
+  <% if (features && features.cookieConsent) { %>
+    <script src="/js/consent.js" defer></script>
+  <% } %>
+  <%- script %>
+</body>
+</html>

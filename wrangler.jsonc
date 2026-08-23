@@ -1,0 +1,31 @@
+{
+  // Cloudflare Worker config for DocMaster.
+  //
+  // "name" is the ONLY thing that decides whether a deploy overwrites another
+  // project. It is DELIBERATELY different from the background remover
+  // ("advanced-bg-remover"), so deploying DocMaster can NEVER touch or remove
+  // that project. They live side by side.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "docmaster",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // The static site built by `npm run build` (scripts/build-static.js).
+  // run_worker_first: the Worker sees every request first, so it can inject the
+  // per-request CSP nonce and set the isolation headers before serving assets.
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+
+  // R2 — required for the oversized AI files that exceed the 25 MiB asset limit
+  // (the 59 MB ONNX layout model + the 26 MB ORT .wasm). Create the bucket and
+  // upload the files listed in r2-manifest.json (see DEPLOY.md), then UNCOMMENT:
+  //
+  // ,"r2_buckets": [
+  //   { "binding": "MODELS_R2", "bucket_name": "docmaster-models" }
+  // ]
+}

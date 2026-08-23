@@ -1,0 +1,1508 @@
+/* ============================================================
+   DocMaster — Document Workspace (editor) — premium UI
+   ------------------------------------------------------------
+   1. Design tokens
+   2. Reset & primitives
+   3. App grid layout
+   4. Scrollbars
+   5. Top toolbar
+   6. Left sidebar (tools)
+   7. Center canvas, pages, empty state, loading
+   8. Right properties panel + controls + cards
+   9. Bottom status bar
+   10. Toasts & tooltips
+   11. Motion / keyframes
+   12. Responsive
+   ============================================================ */
+
+/* -------------------------------------------------------------
+   1. Design tokens
+   ------------------------------------------------------------- */
+:root {
+  /* Surfaces */
+  --ws-bg: #eceef4;
+  --ws-bg-2: #e6e8f1;
+  --ws-chrome: #ffffff;
+  --ws-chrome-2: #f5f6fb;
+  --ws-chrome-3: #eef0f7;
+
+  /* Lines */
+  --ws-border: #e6e8f1;
+  --ws-border-2: #dcdfec;
+  --ws-border-strong: #cfd3e2;
+
+  /* Text */
+  --ws-text: #16182a;
+  --ws-text-soft: #474b66;
+  --ws-text-muted: #767b95;
+  --ws-text-faint: #9aa0b8;
+
+  /* Brand */
+  --ws-primary: #6366f1;
+  --ws-primary-dark: #4f46e5;
+  --ws-primary-soft: #eef0ff;
+  --ws-primary-softer: #f5f6ff;
+  --ws-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+
+  /* Feedback */
+  --ws-ok: #10b981;
+  --ws-warn: #f59e0b;
+  --ws-danger: #ef4444;
+
+  /* Elevation */
+  --sh-1: 0 1px 2px rgba(19, 22, 45, 0.06);
+  --sh-2: 0 2px 6px rgba(19, 22, 45, 0.08);
+  --sh-3: 0 6px 18px rgba(19, 22, 45, 0.1);
+  --sh-pop: 0 12px 34px -8px rgba(19, 22, 45, 0.28);
+  --sh-page: 0 0 0 1px rgba(19, 22, 45, 0.04), 0 1px 3px rgba(19, 22, 45, 0.1),
+    0 16px 32px -12px rgba(19, 22, 45, 0.24);
+
+  /* Radii */
+  --r-1: 6px;
+  --r-2: 8px;
+  --r-3: 10px;
+  --r-4: 14px;
+  --r-pill: 999px;
+
+  /* Metrics */
+  --toolbar-h: 56px;
+  --status-h: 30px;
+  --sidebar-w: 116px;
+  --panel-w: 304px;
+
+  /* Type */
+  --ws-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --ws-display: 'Sora', var(--ws-font);
+
+  /* Motion */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 130ms var(--ease);
+  --t: 190ms var(--ease);
+}
+
+/* -------------------------------------------------------------
+   2. Reset & primitives
+   ------------------------------------------------------------- */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-html,
+.ws-body {
+  height: 100%;
+}
+
+.ws-body {
+  font-family: var(--ws-font);
+  color: var(--ws-text);
+  background: var(--ws-bg);
+  font-size: 13.5px;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+.ws-body button {
+  font-family: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+
+.ws-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ws-primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* -------------------------------------------------------------
+   3. App grid layout
+   ------------------------------------------------------------- */
+.ws {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr var(--panel-w);
+  grid-template-rows: var(--toolbar-h) 1fr var(--status-h);
+  grid-template-areas:
+    'toolbar toolbar toolbar'
+    'sidebar canvas  panel'
+    'status  status  status';
+  height: 100vh;
+  height: 100dvh;
+  transition: grid-template-columns var(--t);
+}
+.ws.is-panel-collapsed {
+  --panel-w: 0px;
+}
+
+/* -------------------------------------------------------------
+   4. Scrollbars
+   ------------------------------------------------------------- */
+.ws-canvas__scroll,
+.ws-sidebar,
+.ws-panel {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ws-border-strong) transparent;
+}
+.ws-canvas__scroll::-webkit-scrollbar,
+.ws-sidebar::-webkit-scrollbar,
+.ws-panel::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+.ws-canvas__scroll::-webkit-scrollbar-thumb,
+.ws-sidebar::-webkit-scrollbar-thumb,
+.ws-panel::-webkit-scrollbar-thumb {
+  background: var(--ws-border-strong);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--r-pill);
+}
+.ws-canvas__scroll::-webkit-scrollbar-thumb:hover,
+.ws-sidebar::-webkit-scrollbar-thumb:hover,
+.ws-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--ws-text-faint);
+  background-clip: padding-box;
+}
+
+/* -------------------------------------------------------------
+   5. Top toolbar
+   ------------------------------------------------------------- */
+.ws-toolbar {
+  grid-area: toolbar;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  background: var(--ws-chrome);
+  border-bottom: 1px solid var(--ws-border);
+  box-shadow: var(--sh-1);
+  z-index: 30;
+}
+.ws-toolbar__group {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+  margin-right: 2px;
+  position: relative;
+}
+.ws-toolbar__group > * + * { margin-left: 3px; }
+.ws-toolbar__group::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 22px;
+  background: var(--ws-border-2);
+}
+.ws-toolbar__group:last-child::after,
+.ws-toolbar__brand::after {
+  display: none;
+}
+.ws-toolbar__spacer {
+  flex: 1;
+}
+.ws-toolbar__brand {
+  gap: 11px;
+  padding-right: 12px;
+  margin-right: 6px;
+}
+.ws-toolbar__brand::after {
+  content: '';
+  display: block;
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 24px;
+  background: var(--ws-border-2);
+}
+
+.ws-home {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #ffffff;
+  overflow: hidden;
+  color: #fff;
+  box-shadow: var(--sh-2);
+  transition: transform var(--t-fast), box-shadow var(--t-fast);
+}
+.ws-home__mark { width: 100%; height: 100%; object-fit: contain; }
+.ws-home:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.ws-home:active {
+  transform: translateY(0);
+}
+.ws-home .ws-icon {
+  width: 20px;
+  height: 20px;
+}
+.ws-docname {
+  font-weight: 650;
+  font-size: 13.5px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ws-text);
+}
+
+.ws-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ws-text-soft);
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background var(--t-fast), color var(--t-fast),
+    border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
+}
+.ws-btn:hover {
+  background: var(--ws-chrome-2);
+  color: var(--ws-text);
+}
+.ws-btn:active {
+  transform: scale(0.96);
+}
+.ws-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.ws-btn:disabled:active {
+  transform: none;
+}
+.ws-btn__ico {
+  display: inline-flex;
+  flex: 0 0 auto; /* icon keeps its size; never squished onto the label */
+}
+/* Space the icon from the label with a MARGIN, not flexbox `gap` — some browsers
+   don't apply `gap` on flex, which made the icon sit flush against the text and
+   look merged. Margin works everywhere. Icon-only buttons (:only-child) get none. */
+.ws-btn__ico:not(:only-child) {
+  margin-right: 7px;
+}
+.ws-btn__ico .ws-icon {
+  width: 18px;
+  height: 18px;
+}
+.ws-btn--icon {
+  width: 36px;
+  padding: 0;
+  justify-content: center;
+  color: var(--ws-text-muted);
+}
+.ws-btn--icon:hover {
+  color: var(--ws-text);
+}
+.ws-btn--accent {
+  background: var(--ws-grad);
+  color: #fff;
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.ws-btn--accent:hover {
+  color: #fff;
+  filter: brightness(1.06);
+  box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.ws-btn--account {
+  color: var(--ws-primary);
+}
+.ws-btn--account:hover {
+  background: var(--ws-primary-soft);
+}
+.ws-btn--lg {
+  height: 46px;
+  padding: 0 22px;
+  font-size: 14px;
+  border-radius: var(--r-3);
+}
+.ws-btn--lg:not(.ws-btn--accent) {
+  border-color: var(--ws-border-strong);
+  background: var(--ws-chrome);
+  color: var(--ws-text);
+}
+.ws-btn--lg:not(.ws-btn--accent):hover {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+  background: var(--ws-primary-softer);
+}
+
+/* Zoom pill */
+.ws-zoom {
+  gap: 1px;
+  background: var(--ws-chrome-2);
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-pill);
+  padding: 2px;
+  height: 36px;
+}
+.ws-zoom::after {
+  display: none;
+}
+.ws-zoom .ws-btn--icon {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-pill);
+}
+.ws-zoom .ws-btn--icon:hover {
+  background: var(--ws-chrome);
+  box-shadow: var(--sh-1);
+}
+.ws-zoom__value {
+  min-width: 58px;
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ws-text);
+  font-weight: 650;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  transition: background var(--t-fast);
+}
+.ws-zoom__value:hover {
+  background: var(--ws-chrome);
+  box-shadow: var(--sh-1);
+}
+
+/* -------------------------------------------------------------
+   6. Left sidebar (tools)
+   ------------------------------------------------------------- */
+.ws-sidebar {
+  grid-area: sidebar;
+  background: var(--ws-chrome);
+  border-right: 1px solid var(--ws-border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 10px 20px;
+}
+.ws-sidebar__group {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--ws-border);
+}
+.ws-sidebar__group:last-child {
+  border-bottom: 0;
+  margin-bottom: 0;
+}
+.ws-sidebar__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ws-text-faint);
+  padding: 4px 8px 6px;
+}
+.ws-tool {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto;
+  justify-items: center;
+  gap: 5px;
+  padding: 10px 4px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-3);
+  background: transparent;
+  color: var(--ws-text-soft);
+  transition: background var(--t-fast), color var(--t-fast),
+    transform var(--t-fast), box-shadow var(--t-fast);
+}
+.ws-tool::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 3px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  background: var(--ws-grad);
+  transition: transform var(--t) var(--ease-out);
+}
+.ws-tool:hover {
+  background: var(--ws-chrome-2);
+  color: var(--ws-text);
+}
+.ws-tool:active {
+  transform: scale(0.95);
+}
+.ws-tool.is-active {
+  background: var(--ws-primary-soft);
+  color: var(--ws-primary-dark);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ws-primary) 22%, transparent);
+}
+.ws-tool.is-active::before {
+  transform: translateY(-50%) scaleY(1);
+}
+.ws-tool__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-2);
+  transition: transform var(--t-fast);
+}
+.ws-tool.is-active .ws-tool__icon {
+  background: color-mix(in srgb, var(--ws-primary) 14%, #fff);
+}
+.ws-tool:hover .ws-tool__icon {
+  transform: translateY(-1px);
+}
+.ws-tool__icon .ws-icon {
+  width: 21px;
+  height: 21px;
+}
+.ws-tool__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+/* -------------------------------------------------------------
+   7. Center canvas
+   ------------------------------------------------------------- */
+.ws-canvas {
+  grid-area: canvas;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  background-color: var(--ws-bg);
+  background-image: radial-gradient(circle, rgba(19, 22, 45, 0.05) 1px, transparent 1.6px);
+  background-size: 22px 22px;
+  background-position: center;
+}
+.ws-canvas::before {
+  /* soft vignette so pages feel lifted from the surface */
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 0%, transparent 60%, rgba(19, 22, 45, 0.05));
+  z-index: 1;
+}
+.ws-canvas__scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  /* Generous, symmetric side gutters give the document Acrobat/Canva-style
+     margins: the horizontal padding scales with the canvas so the usable
+     region is ~15% narrower and the page stays comfortably centered. The
+     page raster keeps its own pixel size — this only affects surrounding
+     whitespace, never the PDF scale/zoom. */
+  padding: 40px clamp(40px, 8%, 140px) 60px;
+  scroll-behavior: smooth;
+  z-index: 2;
+}
+.ws-canvas__scroll.is-panning {
+  scroll-behavior: auto;
+  cursor: grabbing !important;
+}
+.ws-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+  min-height: 100%;
+  min-width: min-content;
+  margin: 0 auto;
+}
+.ws-page {
+  position: relative;
+  background: #fff;
+  border-radius: 3px;
+  box-shadow: var(--sh-page);
+  flex: 0 0 auto;
+  transition: width 170ms var(--ease), height 170ms var(--ease);
+  animation: ws-page-in 340ms var(--ease-out) both;
+}
+.ws-stage.no-anim .ws-page {
+  transition: none;
+}
+.ws-page__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+}
+/* Engine-owned overlay: objects, markup and selection paint here, above the
+   page content and below the page number, without affecting layout. */
+.ws-page__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* PDF.js selectable text layer: transparent glyphs positioned over the rendered
+   page raster and *beneath* the annotation overlay, so text stays copyable and
+   search-ready while shapes/annotations still sit on top. Pointer selection is
+   enabled only under the Select tool (see .is-text-selectable) so drawing and
+   panning tools keep the pointer. Positions rely on the --scale-factor the PDF
+   viewer sets per page. */
+.ws-textlayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: transparent;
+  pointer-events: none;
+}
+.ws.is-text-selectable .ws-textlayer {
+  pointer-events: auto;
+}
+.ws-textlayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.ws-textlayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+.ws-textlayer ::selection {
+  background: rgba(99, 102, 241, 0.35);
+}
+
+/* -------------------------------------------------------------
+   Thumbnail rail (PDF only) — a drawer overlaying the canvas,
+   so the workspace grid is never touched.
+   ------------------------------------------------------------- */
+.ws-thumbs {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 176px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--ws-chrome, #fff);
+  border-right: 1px solid var(--ws-border, rgba(19, 22, 45, 0.1));
+  box-shadow: 6px 0 24px rgba(19, 22, 45, 0.08);
+}
+.ws-thumbs[hidden] {
+  display: none;
+}
+.ws-thumbs__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--ws-border, rgba(19, 22, 45, 0.08));
+}
+.ws-thumbs__title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ws-text-muted, #6b7180);
+}
+.ws-thumbs__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ws-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.ws-thumb:hover {
+  background: rgba(99, 102, 241, 0.07);
+}
+.ws-thumb.is-current {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.1);
+}
+.ws-thumb__canvas {
+  display: block;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(19, 22, 45, 0.18);
+}
+.ws-thumb__num {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ws-text-muted, #6b7180);
+}
+/* Floating opener shown once a PDF is loaded (rail collapsed). */
+.ws-thumbs__open {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 5;
+  box-shadow: 0 2px 10px rgba(19, 22, 45, 0.16);
+  background: var(--ws-chrome, #fff);
+}
+.ws-thumbs__open[hidden] {
+  display: none;
+}
+.ws-page__num {
+  position: absolute;
+  left: 50%;
+  bottom: -26px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ws-text-muted);
+  background: var(--ws-chrome);
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-pill);
+  padding: 2px 10px;
+  box-shadow: var(--sh-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Empty state / dropzone */
+.ws-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 4;
+}
+.ws-empty[hidden] {
+  display: none;
+}
+.ws-empty__card {
+  position: relative;
+  width: min(560px, 100%);
+  text-align: center;
+  background: var(--ws-chrome);
+  border: 1.5px dashed var(--ws-border-strong);
+  border-radius: 22px;
+  padding: 52px 44px;
+  box-shadow: var(--sh-3);
+  transition: border-color var(--t), background var(--t), transform var(--t),
+    box-shadow var(--t);
+  animation: ws-rise 460ms var(--ease-out) both;
+}
+.ws-empty.is-dragover .ws-empty__card {
+  border-color: var(--ws-primary);
+  border-style: solid;
+  background: var(--ws-primary-softer);
+  transform: scale(1.015);
+  box-shadow: var(--sh-pop);
+}
+.ws-empty__icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 22px;
+  border-radius: 22px;
+  background: var(--ws-grad);
+  color: #fff;
+  box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.ws-empty.is-dragover .ws-empty__icon {
+  animation: ws-bob 900ms var(--ease) infinite;
+}
+.ws-empty__icon .ws-icon {
+  width: 34px;
+  height: 34px;
+}
+.ws-empty__title {
+  font-family: var(--ws-display);
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 9px;
+}
+.ws-empty__lead {
+  color: var(--ws-text-soft);
+  font-size: 14px;
+  max-width: 380px;
+  margin: 0 auto 26px;
+}
+.ws-empty__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.ws-empty__formats {
+  display: flex;
+  gap: 7px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.ws-chip {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ws-text-muted);
+  background: var(--ws-chrome-2);
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-pill);
+  padding: 4px 11px;
+}
+.ws-empty__hint {
+  font-size: 12px;
+  color: var(--ws-text-faint);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ws-empty__hint .ws-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Loading / skeleton */
+.ws-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 40px;
+  overflow: hidden;
+  z-index: 5;
+  background: var(--ws-bg);
+}
+.ws-loading[hidden] {
+  display: none;
+}
+.ws-skel-page {
+  width: min(620px, 82%);
+  aspect-ratio: 794 / 1123;
+  background: #fff;
+  border-radius: 3px;
+  box-shadow: var(--sh-page);
+  padding: 12% 11%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ws-skel {
+  border-radius: 5px;
+  background: linear-gradient(
+    100deg,
+    var(--ws-chrome-3) 30%,
+    #f7f8fd 50%,
+    var(--ws-chrome-3) 70%
+  );
+  background-size: 200% 100%;
+  animation: ws-shimmer 1.25s linear infinite;
+}
+.ws-skel--title {
+  height: 26px;
+  width: 62%;
+  margin-bottom: 10px;
+}
+.ws-skel--line {
+  height: 12px;
+}
+.ws-skel--line.s {
+  width: 55%;
+}
+
+/* -------------------------------------------------------------
+   8. Right properties panel
+   ------------------------------------------------------------- */
+.ws-panel {
+  grid-area: panel;
+  background: var(--ws-chrome-2);
+  border-left: 1px solid var(--ws-border);
+  overflow: hidden auto;
+  display: flex;
+  flex-direction: column;
+}
+.ws-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--ws-border);
+  position: sticky;
+  top: 0;
+  background: var(--ws-chrome-2);
+  z-index: 2;
+}
+.ws-panel__icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-3);
+  background: var(--ws-grad);
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.ws-panel__icon .ws-icon {
+  width: 21px;
+  height: 21px;
+}
+.ws-panel__titles {
+  min-width: 0;
+}
+.ws-panel__title {
+  font-family: var(--ws-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.ws-panel__subtitle {
+  font-size: 11.5px;
+  color: var(--ws-text-muted);
+  letter-spacing: 0.01em;
+}
+.ws-panel__body {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  animation: ws-fade 220ms var(--ease-out) both;
+}
+
+/* Collapsible card sections */
+.ws-card {
+  background: var(--ws-chrome);
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-3);
+  box-shadow: var(--sh-1);
+  overflow: hidden;
+}
+.ws-card__head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 13px;
+  border: 0;
+  background: transparent;
+  font-family: var(--ws-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ws-text-soft);
+  transition: background var(--t-fast);
+}
+.ws-card__head:hover {
+  background: var(--ws-chrome-2);
+}
+.ws-card__chevron {
+  display: inline-flex;
+  color: var(--ws-text-faint);
+  transition: transform var(--t) var(--ease);
+}
+.ws-card__chevron .ws-icon {
+  width: 16px;
+  height: 16px;
+}
+.ws-card.is-collapsed .ws-card__chevron {
+  transform: rotate(-90deg);
+}
+.ws-card__body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--t) var(--ease);
+}
+.ws-card.is-collapsed .ws-card__body {
+  grid-template-rows: 0fr;
+}
+.ws-card__inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.ws-card__pad {
+  padding: 4px 13px 15px;
+  display: grid;
+  gap: 14px;
+}
+
+/* Fields & controls */
+.ws-field {
+  display: grid;
+  gap: 7px;
+}
+.ws-field__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ws-text-soft);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  letter-spacing: 0.005em;
+}
+.ws-field__value {
+  color: var(--ws-text-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ws-input,
+.ws-select,
+.ws-textarea {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--ws-border-strong);
+  border-radius: var(--r-2);
+  background: var(--ws-chrome-2);
+  color: var(--ws-text);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color var(--t-fast), background var(--t-fast),
+    box-shadow var(--t-fast);
+}
+.ws-input::placeholder,
+.ws-textarea::placeholder {
+  color: var(--ws-text-faint);
+}
+.ws-textarea {
+  height: auto;
+  min-height: 88px;
+  padding: 9px 11px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.ws-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23767b95' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.ws-input:hover,
+.ws-select:hover,
+.ws-textarea:hover {
+  border-color: var(--ws-text-faint);
+}
+.ws-input:focus,
+.ws-select:focus,
+.ws-textarea:focus {
+  outline: none;
+  border-color: var(--ws-primary);
+  background: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ws-primary) 16%, transparent);
+}
+
+.ws-heading {
+  font-family: var(--ws-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ws-text-muted);
+}
+.ws-note {
+  font-size: 12.5px;
+  color: var(--ws-text-soft);
+  background: var(--ws-chrome-2);
+  border: 1px solid var(--ws-border-2);
+  border-left: 3px solid var(--ws-border-strong);
+  border-radius: var(--r-1);
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+/* Color control */
+.ws-color {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 6px 0 6px;
+  border: 1px solid var(--ws-border-strong);
+  border-radius: var(--r-2);
+  background: var(--ws-chrome-2);
+  transition: border-color var(--t-fast);
+}
+.ws-color:hover {
+  border-color: var(--ws-text-faint);
+}
+.ws-color input[type='color'] {
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-1);
+  background: none;
+  cursor: pointer;
+}
+.ws-color input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.ws-color input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: 3px;
+}
+.ws-color__hex {
+  font-variant-numeric: tabular-nums;
+  color: var(--ws-text-soft);
+  text-transform: uppercase;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Range control */
+.ws-range {
+  width: 100%;
+  height: 20px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.ws-range::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--ws-border-strong);
+}
+.ws-range::-moz-range-track {
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--ws-border-strong);
+}
+.ws-range::-moz-range-progress {
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--ws-primary);
+}
+.ws-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -6px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--ws-primary);
+  box-shadow: var(--sh-1);
+  transition: transform var(--t-fast);
+}
+.ws-range::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--ws-primary);
+  box-shadow: var(--sh-1);
+}
+.ws-range:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.ws-range:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+/* Segmented control */
+.ws-segment {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--ws-chrome-2);
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-2);
+}
+.ws-segment__btn {
+  height: 32px;
+  border: 0;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--ws-text-soft);
+  font-weight: 600;
+  font-size: 12.5px;
+  transition: background var(--t-fast), color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+.ws-segment__btn:hover {
+  background: color-mix(in srgb, var(--ws-chrome) 70%, transparent);
+  color: var(--ws-text);
+}
+.ws-segment__btn.is-on {
+  background: #fff;
+  color: var(--ws-primary-dark);
+  box-shadow: var(--sh-1);
+}
+
+/* Checkbox */
+.ws-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ws-text-soft);
+  cursor: pointer;
+  user-select: none;
+}
+.ws-checkbox input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--ws-primary);
+  cursor: pointer;
+}
+
+/* Action button */
+.ws-action-btn {
+  height: 42px;
+  border: 0;
+  border-radius: var(--r-2);
+  background: var(--ws-grad);
+  color: #fff;
+  font-weight: 650;
+  font-size: 13.5px;
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition: filter var(--t-fast), transform var(--t-fast),
+    box-shadow var(--t-fast);
+}
+.ws-action-btn:hover {
+  filter: brightness(1.06);
+  box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.ws-action-btn:active {
+  transform: scale(0.98);
+}
+.ws-action-btn--ghost {
+  background: var(--ws-chrome);
+  color: var(--ws-text);
+  border: 1px solid var(--ws-border-strong);
+  box-shadow: var(--sh-1);
+}
+.ws-action-btn--ghost:hover {
+  filter: none;
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+  background: var(--ws-primary-softer);
+}
+
+/* -------------------------------------------------------------
+   9. Bottom status bar
+   ------------------------------------------------------------- */
+.ws-status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  background: var(--ws-chrome);
+  border-top: 1px solid var(--ws-border);
+  font-size: 11.5px;
+  color: var(--ws-text-muted);
+  z-index: 10;
+}
+.ws-status__group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ws-status__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ws-status__item b {
+  color: var(--ws-text-soft);
+  font-weight: 650;
+}
+.ws-status__item--pill {
+  background: var(--ws-chrome-2);
+  border: 1px solid var(--ws-border-2);
+  border-radius: var(--r-pill);
+  padding: 2px 10px;
+  color: var(--ws-text-soft);
+  font-weight: 600;
+}
+.ws-status__divider {
+  width: 1px;
+  height: 14px;
+  background: var(--ws-border-2);
+}
+.ws-status__sep {
+  opacity: 0.45;
+}
+.ws-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ws-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ws-ok) 18%, transparent);
+  transition: background var(--t-fast), box-shadow var(--t-fast);
+}
+.ws-status__dot.is-busy {
+  background: var(--ws-warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ws-warn) 20%, transparent);
+  animation: ws-pulse 1.1s var(--ease) infinite;
+}
+.ws-status__dot.is-error {
+  background: var(--ws-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ws-danger) 20%, transparent);
+}
+
+/* -------------------------------------------------------------
+   10. Toasts & tooltips
+   ------------------------------------------------------------- */
+.ws-toasts {
+  position: fixed;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  z-index: 80;
+  pointer-events: none;
+}
+.ws-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #16182b;
+  color: #fff;
+  padding: 11px 18px;
+  border-radius: var(--r-3);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--sh-pop);
+  animation: ws-toast-in 240ms var(--ease-out);
+}
+
+/* Tooltip for icon-only toolbar buttons */
+.ws-btn[data-tip] {
+  position: relative;
+}
+.ws-btn[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #16182b;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 5px 9px;
+  border-radius: var(--r-1);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: var(--sh-pop);
+  transition: opacity var(--t-fast), transform var(--t-fast);
+  z-index: 90;
+}
+.ws-btn[data-tip]::before {
+  content: '';
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-bottom-color: #16182b;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+  z-index: 90;
+}
+.ws-btn[data-tip]:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  transition-delay: 320ms;
+}
+.ws-btn[data-tip]:hover::before {
+  opacity: 1;
+  transition-delay: 320ms;
+}
+
+/* -------------------------------------------------------------
+   11. Keyframes
+   ------------------------------------------------------------- */
+@keyframes ws-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes ws-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+}
+@keyframes ws-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes ws-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+@keyframes ws-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes ws-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes ws-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+/* -------------------------------------------------------------
+   12. Responsive
+   ------------------------------------------------------------- */
+@media (max-width: 1180px) {
+  :root {
+    --panel-w: 288px;
+  }
+}
+@media (max-width: 1024px) {
+  :root {
+    --sidebar-w: 100px;
+    --panel-w: 280px;
+  }
+}
+
+@media (max-width: 768px) {
+  .ws {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--toolbar-h) 1fr auto var(--status-h);
+    grid-template-areas:
+      'toolbar'
+      'canvas'
+      'sidebar'
+      'status';
+  }
+  .ws-btn__txt,
+  .ws-docname {
+    display: none;
+  }
+  .ws-sidebar {
+    border-right: 0;
+    border-top: 1px solid var(--ws-border);
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 10px;
+    box-shadow: 0 -1px 2px rgba(19, 22, 45, 0.05);
+  }
+  .ws-sidebar__group {
+    display: flex;
+    gap: 4px;
+    padding: 0 6px 0 0;
+    margin: 0 2px 0 0;
+    border-bottom: 0;
+    border-right: 1px solid var(--ws-border);
+  }
+  .ws-sidebar__label {
+    display: none;
+  }
+  .ws-tool {
+    flex: 0 0 auto;
+    width: 62px;
+  }
+  .ws-tool::before {
+    display: none;
+  }
+  .ws-panel {
+    position: fixed;
+    top: var(--toolbar-h);
+    right: 0;
+    bottom: var(--status-h);
+    width: min(324px, 88vw);
+    border-left: 1px solid var(--ws-border);
+    box-shadow: var(--sh-pop);
+    transform: translateX(100%);
+    transition: transform var(--t) var(--ease-out);
+    z-index: 50;
+  }
+  .ws:not(.is-panel-collapsed) .ws-panel {
+    transform: translateX(0);
+  }
+  .ws-canvas__scroll {
+    /* Tighter gutters on phones — keep a touch of breathing room without
+       forcing the page to scroll horizontally on small screens. */
+    padding: 24px clamp(16px, 5%, 40px) 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

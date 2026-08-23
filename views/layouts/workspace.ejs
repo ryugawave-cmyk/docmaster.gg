@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" class="ws-html">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f1020" />
+
+  <title><%= pageTitle %> · <%= site.name %></title>
+  <meta name="description" content="<%= metaDescription %>" />
+  <meta name="robots" content="<%= (typeof robots !== 'undefined' && robots) ? robots : 'noindex, nofollow' %>" />
+
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+
+  <!-- Fonts are self-hosted (see public/css/fonts.css) so the app can enable
+       cross-origin isolation (COOP/COEP) without a cross-origin subresource. -->
+  <link rel="stylesheet" href="/css/fonts.css" />
+
+  <link rel="stylesheet" href="/css/workspace.css" />
+  <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="/css/blank-editor.css" />
+  <%- style %>
+</head>
+<body class="ws-body">
+  <%- body %>
+
+  <script type="module" src="/js/app/index.js"></script>
+  <%- script %>
+</body>
+</html>

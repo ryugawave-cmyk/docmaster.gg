@@ -1,0 +1,77 @@
+<div class="app" id="app" data-initial="<%= (typeof initialView !== 'undefined' && initialView) || '' %>">
+
+  <!-- ============ Top toolbar (shared, adapts to workspace) ============ -->
+  <header class="ws-toolbar app-toolbar" data-region="toolbar">
+    <div class="ws-toolbar__group ws-toolbar__brand">
+      <a class="ws-home" href="/" data-tip="Back to Alvion Office" aria-label="Back to Alvion Office home">
+        <img class="ws-home__mark" src="/images/logo-mark.png" alt="" />
+      </a>
+      <button class="ws-btn ws-btn--menu" type="button" data-action="file-menu" aria-haspopup="menu" aria-expanded="false" data-tip="File"><span class="ws-btn__txt">File</span><span class="ws-btn__ico ws-btn__caret" data-icon="chevron"></span></button>
+      <span class="ws-docname" data-bind="docName" title="Document name">Untitled</span>
+    </div>
+
+    <div class="ws-toolbar__group">
+      <button class="ws-btn" type="button" data-action="open"><span class="ws-btn__ico" data-icon="open"></span><span class="ws-btn__txt">Open</span></button>
+      <button class="ws-btn" type="button" data-action="save"><span class="ws-btn__ico" data-icon="save"></span><span class="ws-btn__txt">Save</span></button>
+      <button class="ws-btn ws-btn--accent" type="button" data-action="export"><span class="ws-btn__ico" data-icon="export"></span><span class="ws-btn__txt">Export</span></button>
+    </div>
+
+    <div class="ws-toolbar__group" role="group" aria-label="History">
+      <button class="ws-btn ws-btn--icon" type="button" data-action="undo" data-icon="undo" data-tip="Undo · Ctrl+Z" aria-label="Undo" disabled></button>
+      <button class="ws-btn ws-btn--icon" type="button" data-action="redo" data-icon="redo" data-tip="Redo · Ctrl+Shift+Z" aria-label="Redo" disabled></button>
+    </div>
+
+    <div class="ws-toolbar__group ws-zoom" role="group" aria-label="Zoom">
+      <button class="ws-btn ws-btn--icon" type="button" data-action="zoom-out" data-icon="minus" aria-label="Zoom out"></button>
+      <button class="ws-zoom__value" type="button" data-action="zoom-fit" data-bind="zoom" title="Fit to width">100%</button>
+      <button class="ws-btn ws-btn--icon" type="button" data-action="zoom-in" data-icon="plus" aria-label="Zoom in"></button>
+    </div>
+
+    <!-- Workspace-specific tools are injected here by the active workspace -->
+    <div class="ws-toolbar__workspace" data-region="toolbar-workspace" role="group" aria-label="Workspace tools"></div>
+
+    <div class="ws-toolbar__spacer"></div>
+
+    <div class="ws-toolbar__group">
+      <button class="ws-btn ws-btn--icon" type="button" data-action="search" data-icon="search" data-tip="Search" aria-label="Search"></button>
+      <button class="ws-btn ws-btn--icon" type="button" data-action="print" data-icon="print" data-tip="Print" aria-label="Print"></button>
+      <button class="ws-btn ws-btn--icon" type="button" data-action="toggle-panel" data-icon="panel" data-tip="Toggle panel" aria-label="Toggle properties panel"></button>
+    </div>
+    <div class="ws-toolbar__group">
+      <button class="ws-btn ws-btn--icon ws-btn--account" type="button" data-action="account" data-icon="account" data-tip="Account" aria-label="Account"></button>
+    </div>
+  </header>
+
+  <!-- ============ Left navigation (shared) ============ -->
+  <nav class="app-nav" data-region="nav" aria-label="Primary navigation">
+    <!-- Populated from config/navigation.js -->
+  </nav>
+
+  <!-- ============ Center stage (active workspace mounts here) ============ -->
+  <main class="app-stage" data-region="stage" aria-label="Workspace">
+    <!-- Each workspace mounts its own hidden/shown layer here; switching never reloads -->
+  </main>
+
+  <!-- ============ Right contextual properties panel (shared) ============ -->
+  <aside class="ws-panel app-panel" data-region="panel" aria-label="Properties">
+    <!-- Populated from the current selection via the property registry -->
+  </aside>
+
+  <!-- ============ Bottom status bar (shared) ============ -->
+  <footer class="ws-status app-status" data-region="status">
+    <div class="ws-status__group">
+      <span class="ws-status__dot" data-bind="statusDot"></span>
+      <span class="ws-status__item" data-bind="status">Ready</span>
+    </div>
+    <div class="ws-status__group">
+      <span class="ws-status__item ws-status__item--pill" data-bind="docType">No file</span>
+      <span class="ws-status__item ws-status__item--pill" data-bind="pageSize" hidden></span>
+      <span class="ws-status__divider"></span>
+      <span class="ws-status__item">Page&nbsp;<b data-bind="currentPage">–</b> <span class="ws-status__sep">/</span> <span data-bind="totalPages">–</span></span>
+      <span class="ws-status__divider"></span>
+      <span class="ws-status__item" data-bind="zoomStatus">100%</span>
+      <span class="ws-status__divider"></span>
+      <span class="ws-status__item" data-bind="fileSize">—</span>
+    </div>
+  </footer>
+</div>

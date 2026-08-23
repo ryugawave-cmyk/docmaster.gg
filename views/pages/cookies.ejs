@@ -1,0 +1,85 @@
+<section class="page-hero page-hero--legal">
+  <div class="container">
+    <span class="eyebrow eyebrow--center">Legal</span>
+    <h1 class="page-hero__title">Cookie Policy</h1>
+    <p class="page-hero__lead">
+      This policy explains the cookies and similar browser storage that <%= site.name %> uses,
+      why we use them, and how you can control them.
+    </p>
+    <p class="legal-updated">Last updated: <%= lastUpdated %></p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container prose legal">
+
+    <h2>1. What are cookies and local storage?</h2>
+    <p>
+      Cookies are small text files a website can store in your browser. Similar technologies —
+      such as <em>local storage</em> — let a site keep small pieces of information on your device.
+      Together they are used to remember preferences and, in some cases, to support advertising.
+    </p>
+
+    <h2>2. How we use them</h2>
+    <p>
+      <%= site.name %> is designed to be light on cookies. We currently use only what is needed to
+      run the site and to remember your choices. Non-essential technologies (such as advertising
+      cookies) are used only where you have consented.
+    </p>
+
+    <h3>Strictly necessary</h3>
+    <ul class="check-list check-list--muted">
+      <li>
+        <strong>Cookie preference.</strong> When you accept or decline non-essential cookies, we
+        store that choice in your browser’s local storage so we can respect it on your next visit.
+        This is required for the site to honour your decision and cannot be switched off.
+      </li>
+    </ul>
+
+    <h3>Advertising (only with consent, when enabled)</h3>
+    <p>
+      To help keep <%= site.name %> free, we may show ads using Google AdSense. When advertising is
+      enabled and you have consented (where consent is required), Google and its partners may set
+      cookies to serve and measure ads.
+    </p>
+    <ul class="check-list check-list--muted">
+      <li>These cookies are set by Google, not by <%= site.name %>.</li>
+      <li>They may be used to show ads based on your prior visits to this and other sites.</li>
+      <li>You can manage or opt out via <a href="https://www.google.com/settings/ads" rel="noopener noreferrer" target="_blank">Google Ads Settings</a> and <a href="https://www.aboutads.info/choices/" rel="noopener noreferrer" target="_blank">aboutads.info/choices</a>.</li>
+    </ul>
+
+    <h3>Analytics</h3>
+    <p>
+      We do not currently use analytics cookies. If we add analytics in the future, we will update
+      this policy and, where required, ask for your consent first.
+    </p>
+
+    <h2>3. Managing your choices</h2>
+    <p>
+      We currently do not set optional analytics or advertising cookies, so no consent banner is
+      shown. If we introduce optional cookies in the future (for example, when advertising is
+      enabled), we will show a consent banner with three clear options — <strong>Accept all</strong>,
+      <strong>Decline optional</strong>, and <strong>Manage preferences</strong> — where you can turn
+      optional categories on or off individually. Strictly necessary storage is always on because the
+      site cannot work without it.
+    </p>
+    <p>
+      Optional analytics and advertising technologies are never loaded unless you allow them. When a
+      banner is in use, consent defaults to “denied” until you choose, and your choice is shared with
+      advertising and analytics tools using Google Consent Mode so they respect your decision — and a
+      <strong>Cookie settings</strong> link in the footer lets you change it at any time.
+    </p>
+    <p>
+      You can also control cookies through your browser settings — most browsers let you block or
+      delete cookies.
+    </p>
+
+    <h2>4. More information</h2>
+    <p>
+      For how cookies fit into our wider handling of data, see our
+      <a href="/privacy">Privacy Policy</a>. Questions? Email
+      <a href="mailto:<%= site.privacyEmail %>"><%= site.privacyEmail %></a>.
+    </p>
+
+  </div>
+</section>

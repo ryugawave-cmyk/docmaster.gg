@@ -1,0 +1,10 @@
+<%
+// Reusable brand lockup (logo mark + wordmark), shared by header and footer.
+// Usage: include('../partials/brand')
+%>
+<a href="/" class="brand" aria-label="<%= site.name %> home">
+  <span class="brand-mark" aria-hidden="true">
+    <img src="/images/logo-mark.png" alt="" width="40" height="40" decoding="async" />
+  </span>
+  <span class="brand-name"><%= site.name %></span>
+</a>

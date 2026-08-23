@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" role="presentation" aria-hidden="true">
+  <!-- Static particle field: the poster/fallback for the hero particle video.
+       Small glowing lavender/blue dots on a transparent background, matching the
+       live CSS animation so a swap between them is seamless. -->
+  <defs>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="4" />
+    </filter>
+    <radialGradient id="amb" cx="70%" cy="42%" r="60%">
+      <stop offset="0" stop-color="#8b5cf6" stop-opacity="0.16" />
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="760" fill="url(#amb)" />
+  <g filter="url(#glow)">
+    <circle cx="384" cy="122" r="3.2" fill="#a78bfa" opacity="0.45" />
+    <circle cx="696" cy="91"  r="2.4" fill="#818cf8" opacity="0.40" />
+    <circle cx="888" cy="167" r="4"   fill="#8b5cf6" opacity="0.50" />
+    <circle cx="264" cy="304" r="2.4" fill="#c4b5fd" opacity="0.35" />
+    <circle cx="552" cy="258" r="3.2" fill="#a78bfa" opacity="0.42" />
+    <circle cx="792" cy="334" r="5"   fill="#8b5cf6" opacity="0.50" />
+    <circle cx="984" cy="289" r="2.4" fill="#60a5fa" opacity="0.38" />
+    <circle cx="360" cy="456" r="3.2" fill="#818cf8" opacity="0.40" />
+    <circle cx="624" cy="426" r="2.4" fill="#c4b5fd" opacity="0.34" />
+    <circle cx="840" cy="486" r="4"   fill="#a78bfa" opacity="0.46" />
+    <circle cx="480" cy="578" r="3.2" fill="#8b5cf6" opacity="0.40" />
+    <circle cx="720" cy="608" r="2.4" fill="#60a5fa" opacity="0.36" />
+    <circle cx="936" cy="562" r="3.2" fill="#818cf8" opacity="0.42" />
+    <circle cx="600" cy="152" r="4"   fill="#a78bfa" opacity="0.48" />
+    <circle cx="768" cy="228" r="2.4" fill="#c4b5fd" opacity="0.34" />
+    <circle cx="432" cy="365" r="3.2" fill="#818cf8" opacity="0.40" />
+    <circle cx="864" cy="395" r="2.4" fill="#60a5fa" opacity="0.36" />
+    <circle cx="312" cy="198" r="2.4" fill="#8b5cf6" opacity="0.33" />
+  </g>
+</svg>

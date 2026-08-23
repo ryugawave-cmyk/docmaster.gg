@@ -1,0 +1,48 @@
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <%- include('./brand') %>
+        <p class="footer-tagline"><%= site.tagline %></p>
+        <p class="footer-privacy-note">Your files are processed in your browser — never uploaded to our servers.</p>
+      </div>
+
+      <div class="footer-col">
+        <h2 class="footer-heading">Product</h2>
+        <ul>
+          <% footerLinks.product.forEach(function (link) { %>
+            <li><a href="<%= link.href %>"><%= link.label %></a></li>
+          <% }); %>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h2 class="footer-heading">Company</h2>
+        <ul>
+          <% footerLinks.company.forEach(function (link) { %>
+            <li><a href="<%= link.href %>"><%= link.label %></a></li>
+          <% }); %>
+          <li><a href="mailto:<%= site.contactEmail %>"><%= site.contactEmail %></a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h2 class="footer-heading">Legal</h2>
+        <ul>
+          <% footerLinks.legal.forEach(function (link) { %>
+            <li><a href="<%= link.href %>"><%= link.label %></a></li>
+          <% }); %>
+          <% if (features && features.cookieConsent) { %>
+            <li><button type="button" class="footer-linkbtn" data-cc-open>Cookie settings</button></li>
+          <% } %>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <p>&copy; <%= currentYear %> <%= site.name %>. All rights reserved.</p>
+      <p class="footer-dev">Developed by <span class="footer-dev-name">Rajat Noatia</span></p>
+      <p class="footer-made">Crafted for people who work with documents.</p>
+    </div>
+  </div>
+</footer>

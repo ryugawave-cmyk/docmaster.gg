@@ -1,0 +1,20 @@
+<section class="error-page">
+  <div class="container">
+    <span class="error-code">500</span>
+    <h1 class="error-title">Something went wrong</h1>
+    <p class="error-lead">
+      An unexpected error occurred on our end. Please try again in a moment.
+    </p>
+    <div class="error-actions">
+      <a href="/" class="btn btn-primary btn-lg">Back home</a>
+      <a href="/contact" class="btn btn-outline btn-lg">Report a problem</a>
+    </div>
+
+    <% if (typeof stack !== 'undefined' && stack) { %>
+      <details class="error-details">
+        <summary>Error details (development only)</summary>
+        <pre><%= stack %></pre>
+      </details>
+    <% } %>
+  </div>
+</section>

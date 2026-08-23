@@ -1,0 +1,126 @@
+<section class="page-hero page-hero--tool" style="--accent: <%= tool.accent %>;">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a><span aria-hidden="true">/</span>
+      <a href="/tools">Tools</a><span aria-hidden="true">/</span>
+      <span aria-current="page"><%= tool.name %></span>
+    </nav>
+
+    <span class="tool-hero__icon" aria-hidden="true">
+      <%- include('../partials/icon', { name: tool.icon }) %>
+    </span>
+    <h1 class="page-hero__title"><%= tool.name %></h1>
+    <p class="page-hero__lead"><%= content.lead || tool.description %></p>
+
+    <div class="tool-cta">
+      <a href="<%= openHref %>" class="btn btn-primary btn-lg">Open in editor</a>
+      <a href="/tools" class="btn btn-outline btn-lg">Browse all tools</a>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container tool-doc">
+
+    <% (content.intro || [tool.description]).forEach(function (para) { %>
+      <p class="tool-doc__intro"><%= para %></p>
+    <% }); %>
+
+    <% if (content.capabilities && content.capabilities.length) { %>
+      <h2>What this tool does</h2>
+      <ul class="check-list">
+        <% content.capabilities.forEach(function (item) { %>
+          <li><%= item %></li>
+        <% }); %>
+      </ul>
+    <% } %>
+
+    <% if (content.audience && content.audience.length) { %>
+      <h2>Who it’s useful for</h2>
+      <ul class="check-list check-list--muted">
+        <% content.audience.forEach(function (item) { %>
+          <li><%= item %></li>
+        <% }); %>
+      </ul>
+    <% } %>
+
+    <% if (content.howTo && content.howTo.length) { %>
+      <h2>How to use it</h2>
+      <ol class="howto">
+        <% content.howTo.forEach(function (step) { %>
+          <li><%= step %></li>
+        <% }); %>
+      </ol>
+    <% } %>
+
+    <div class="tool-facts">
+      <% if (content.fileTypes) { %>
+        <div class="tool-fact">
+          <h3>Supported files</h3>
+          <p><%= content.fileTypes %></p>
+        </div>
+      <% } %>
+      <% if (content.limitations && content.limitations.length) { %>
+        <div class="tool-fact">
+          <h3>Good to know</h3>
+          <ul>
+            <% content.limitations.forEach(function (item) { %>
+              <li><%= item %></li>
+            <% }); %>
+          </ul>
+        </div>
+      <% } %>
+    </div>
+
+    <div class="privacy-callout">
+      <span class="privacy-callout__icon" aria-hidden="true">
+        <%- include('../partials/icon', { name: 'protect' }) %>
+      </span>
+      <div>
+        <h3>Your files stay on your device</h3>
+        <p><%= clientPrivacy %></p>
+        <p class="privacy-callout__link"><a href="/privacy">Read our Privacy Policy →</a></p>
+      </div>
+    </div>
+
+    <% if (content.faq && content.faq.length) { %>
+      <h2>Frequently asked questions</h2>
+      <div class="faq">
+        <% content.faq.forEach(function (item) { %>
+          <details class="faq__item">
+            <summary><%= item.q %></summary>
+            <p><%= item.a %></p>
+          </details>
+        <% }); %>
+      </div>
+    <% } %>
+
+    <div class="tool-doc__foot">
+      <a href="<%= openHref %>" class="btn btn-primary btn-lg">Open <%= tool.name %> in the editor</a>
+    </div>
+  </div>
+</section>
+
+<% if (related && related.length) { %>
+  <section class="section section--alt">
+    <div class="container">
+      <h2 class="related__title">Related tools</h2>
+      <div class="tools-grid tools-grid--related">
+        <% related.forEach(function (t) { %>
+          <a class="tool-card" href="<%= toolPageHref(t) %>" style="--accent: <%= t.accent %>;">
+            <span class="tool-card__icon" aria-hidden="true">
+              <%- include('../partials/icon', { name: t.icon }) %>
+            </span>
+            <span class="tool-card__body">
+              <span class="tool-card__title"><%= t.name %></span>
+              <span class="tool-card__desc"><%= t.tagline %></span>
+            </span>
+            <span class="tool-card__arrow" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </span>
+          </a>
+        <% }); %>
+      </div>
+    </div>
+  </section>
+<% } %>

@@ -1,0 +1,46 @@
+{
+  "name": "docmaster",
+  "version": "1.0.0",
+  "description": "DocMaster — a modern, all-in-one SaaS platform for working with PDF and documents.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "build": "node scripts/build-static.js",
+    "preview": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "service:install": "node scripts/service-install.js",
+    "service:uninstall": "node scripts/service-uninstall.js",
+    "lint": "echo \"No linter configured yet\" && exit 0",
+    "verify:delete": "node scripts/verify-delete.js",
+    "test": "node scripts/verify-delete.js"
+  },
+  "keywords": [
+    "docmaster",
+    "pdf",
+    "saas",
+    "express",
+    "ejs",
+    "documents"
+  ],
+  "author": "DocMaster",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "express-ejs-layouts": "^2.5.1",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "pdfjs-dist": "^4.7.76"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "puppeteer-core": "^25.5.0"
+  }
+}

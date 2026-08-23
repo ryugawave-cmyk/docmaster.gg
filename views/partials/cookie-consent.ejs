@@ -1,0 +1,93 @@
+<!-- Cookie consent — Alvion Office.
+     Non-blocking banner + accessible preferences modal. Consent is stored in
+     localStorage and mirrored to Google Consent Mode v2 (defaults denied), so it
+     is compatible with Google AdSense's consent requirements. Optional analytics/
+     advertising technologies must be gated on window.AlvionConsent.hasConsent(...)
+     and are never loaded before consent is granted. Logic: /js/consent.js
+     (external, so it satisfies the strict CSP — no inline script). -->
+
+<!-- Banner -->
+<div class="cc-banner" data-cc-banner hidden role="region" aria-label="Cookie consent">
+  <div class="cc-banner__inner">
+    <div class="cc-banner__body">
+      <h2 class="cc-banner__title">We value your privacy</h2>
+      <p class="cc-banner__text">
+        <%= site.name %> uses cookies that are necessary to run the site. With your permission, we
+        may also use optional analytics and advertising cookies. Your files are always processed in
+        your browser and are never uploaded. Read our
+        <a href="/cookies">Cookie Policy</a> and <a href="/privacy">Privacy Policy</a>.
+      </p>
+    </div>
+    <div class="cc-banner__actions">
+      <button type="button" class="btn btn-ghost btn-sm" data-cc-manage>Manage preferences</button>
+      <button type="button" class="btn btn-outline btn-sm" data-cc-decline>Decline optional</button>
+      <button type="button" class="btn btn-primary btn-sm" data-cc-accept>Accept all</button>
+    </div>
+  </div>
+</div>
+
+<!-- Preferences modal -->
+<div class="cc-modal" data-cc-modal hidden role="dialog" aria-modal="true" aria-labelledby="cc-modal-title">
+  <div class="cc-modal__overlay" data-cc-close></div>
+  <div class="cc-modal__panel">
+    <button type="button" class="cc-modal__close" data-cc-close aria-label="Close preferences">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+    <h2 class="cc-modal__title" id="cc-modal-title">Cookie preferences</h2>
+    <p class="cc-modal__intro">
+      Choose which optional cookies <%= site.name %> may use. Necessary cookies keep the site working
+      and can’t be turned off. Your choices are saved on this device and you can change them any time.
+    </p>
+
+    <div class="cc-options">
+      <div class="cc-option">
+        <div class="cc-option__head">
+          <span class="cc-option__name">Strictly necessary</span>
+          <span class="cc-switch cc-switch--locked" aria-hidden="true">
+            <input type="checkbox" checked disabled />
+            <span class="cc-switch__track"></span>
+          </span>
+        </div>
+        <p class="cc-option__desc">
+          Required to run the site and remember your cookie choice. Always on.
+        </p>
+      </div>
+
+      <div class="cc-option">
+        <div class="cc-option__head">
+          <label class="cc-option__name" for="cc-analytics">Analytics</label>
+          <span class="cc-switch">
+            <input type="checkbox" id="cc-analytics" data-cc-category="analytics" />
+            <span class="cc-switch__track"></span>
+          </span>
+        </div>
+        <p class="cc-option__desc">
+          Optional. Would help us understand how the site is used so we can improve it.
+          Not currently active — off unless you allow it.
+        </p>
+      </div>
+
+      <div class="cc-option">
+        <div class="cc-option__head">
+          <label class="cc-option__name" for="cc-advertising">Advertising</label>
+          <span class="cc-switch">
+            <input type="checkbox" id="cc-advertising" data-cc-category="advertising" />
+            <span class="cc-switch__track"></span>
+          </span>
+        </div>
+        <p class="cc-option__desc">
+          Optional. If advertising is enabled in future, partners such as Google may use cookies to
+          serve and measure ads. Off unless you allow it.
+        </p>
+      </div>
+    </div>
+
+    <div class="cc-modal__actions">
+      <button type="button" class="btn btn-outline btn-sm" data-cc-decline>Decline optional</button>
+      <button type="button" class="btn btn-primary btn-sm" data-cc-save>Save preferences</button>
+    </div>
+    <p class="cc-modal__links">
+      Learn more in our <a href="/cookies">Cookie Policy</a> and <a href="/privacy">Privacy Policy</a>.
+    </p>
+  </div>
+</div>

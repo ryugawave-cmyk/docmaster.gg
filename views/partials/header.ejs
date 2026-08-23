@@ -1,0 +1,28 @@
+<header class="site-header" data-header>
+  <div class="container header-inner">
+    <%- include('./brand') %>
+
+    <button class="nav-toggle" data-nav-toggle aria-expanded="false" aria-controls="primary-nav" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+
+    <nav class="primary-nav" id="primary-nav" data-nav aria-label="Primary">
+      <ul class="nav-list">
+        <% navigation.forEach(function (item) { %>
+          <%
+            const isActive = item.match === 'prefix'
+              ? currentPath.startsWith(item.href)
+              : currentPath === item.href;
+          %>
+          <li>
+            <a href="<%= item.href %>" class="nav-link <%= isActive ? 'is-active' : '' %>"<%- isActive ? ' aria-current="page"' : '' %>><%= item.label %></a>
+          </li>
+        <% }); %>
+      </ul>
+      <div class="nav-actions">
+        <a href="/tools" class="btn btn-ghost">Explore tools</a>
+        <a href="/workspace" class="btn btn-primary">Open editor</a>
+      </div>
+    </nav>
+  </div>
+</header>

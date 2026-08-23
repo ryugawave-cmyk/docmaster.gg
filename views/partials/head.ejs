@@ -1,0 +1,81 @@
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#6366f1" />
+
+<%
+  const fullTitle = (typeof pageTitle !== 'undefined' && pageTitle)
+    ? `${pageTitle} · ${site.name}`
+    : `${site.name} — ${site.tagline}`;
+  const description = (typeof metaDescription !== 'undefined' && metaDescription)
+    ? metaDescription
+    : site.description;
+  const canonical = (typeof canonicalUrl !== 'undefined' && canonicalUrl)
+    ? canonicalUrl
+    : site.url;
+  const ogImage = site.url + (site.ogImage || '/images/picture-web.jpg');
+%>
+
+<title><%= fullTitle %></title>
+<meta name="description" content="<%= description %>" />
+<meta name="robots" content="<%= (typeof robots !== 'undefined' && robots) ? robots : 'index, follow, max-image-preview:large' %>" />
+<link rel="canonical" href="<%= canonical %>" />
+
+<!-- Open Graph / social -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="<%= site.name %>" />
+<meta property="og:title" content="<%= fullTitle %>" />
+<meta property="og:description" content="<%= description %>" />
+<meta property="og:url" content="<%= canonical %>" />
+<meta property="og:locale" content="<%= site.locale %>" />
+<meta property="og:image" content="<%= ogImage %>" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<% if (site.twitter) { %><meta name="twitter:site" content="<%= site.twitter %>" /><% } %>
+<meta name="twitter:title" content="<%= fullTitle %>" />
+<meta name="twitter:description" content="<%= description %>" />
+<meta name="twitter:image" content="<%= ogImage %>" />
+
+<!-- Favicon -->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/images/logo-mark.png" type="image/png" sizes="40x40" />
+<link rel="apple-touch-icon" href="/images/logo-mark.png" />
+
+<!-- Fonts are self-hosted (public/css/fonts.css) — no cross-origin CDN, so the
+     app can run under cross-origin isolation (COOP/COEP). -->
+<link rel="stylesheet" href="/css/fonts.css" />
+
+<!-- Styles -->
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/pages.css" />
+
+<!-- Structured data (nonce-tagged so the strict CSP allows it) -->
+<script type="application/ld+json" nonce="<%= nonce %>">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "<%= site.url %>/#organization",
+      "name": "<%= site.name %>",
+      "url": "<%= site.url %>/",
+      "logo": "<%= site.url %>/images/logo-mark.png",
+      "description": "<%= site.description %>",
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "customer support",
+        "email": "<%= site.contactEmail %>",
+        "url": "<%= site.url %>/contact"
+      }
+    },
+    {
+      "@type": "WebSite",
+      "@id": "<%= site.url %>/#website",
+      "url": "<%= site.url %>/",
+      "name": "<%= site.name %>",
+      "inLanguage": "en-US",
+      "publisher": { "@id": "<%= site.url %>/#organization" }
+    }
+  ]
+}
+</script>
