@@ -50,7 +50,8 @@ wrangler r2 object put docmaster-models/wasm/ort/ort-wasm-simd-threaded.jsep.was
   --file public/wasm/ort/ort-wasm-simd-threaded.jsep.wasm
 ```
 
-Then **uncomment the `r2_buckets` block** at the bottom of `wrangler.jsonc`.
+The `r2_buckets` binding is **already enabled** in `wrangler.jsonc` (binding
+`MODELS_R2`), so no config change is needed — just create the bucket + upload.
 
 ### 4. (Recommended) Connect the GitHub repo for auto-deploy
 Same model as the bg-remover: push = deploy.
@@ -83,5 +84,15 @@ this. If you later add a *cloud* model:
 npm run build
 npm run preview   # wrangler dev — serves the Worker + dist locally
 ```
-Note: `wrangler dev` won't have the R2 files unless you add them locally, so the
-in-browser AI won't load models in local preview — that's expected.
+
+To make the **AI work in local preview too**, load the oversized files into the
+simulated (local) R2 once — they persist under `.wrangler/state`:
+```
+wrangler r2 object put docmaster-models/models/layout/doclaynet-yolov10m.onnx \
+  --file public/models/layout/doclaynet-yolov10m.onnx --local
+
+wrangler r2 object put docmaster-models/wasm/ort/ort-wasm-simd-threaded.jsep.wasm \
+  --file public/wasm/ort/ort-wasm-simd-threaded.jsep.wasm --local
+```
+Then `npm run preview` serves `/models/*` and `/wasm/*` from local R2 and the
+in-browser AI loads. (This local R2 state is git-ignored under `.wrangler/`.)
