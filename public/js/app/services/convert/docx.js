@@ -301,37 +301,46 @@ function sumCols(cols, start, span) {
 function aiBody(content, aiPages, addImage) {
   const parts = [];
   const pages = content.pages;
-  const MPX = 48;
+  const MPX = 24; // page margin (px) — tight, so the rebuilt flow tracks the PDF
+  let drawId = 1;
 
   pages.forEach((pg, pi) => {
     const ap = aiPages[pi];
     const innerW = Math.max(120, (pg.w || 800) - MPX * 2);
 
-    // Interleave the page's images into the SAME reading-order stream as the text
-    // and tables (by vertical position), placed inline rather than floating at
-    // absolute coordinates — reflowed text/tables no longer match the PDF's exact
-    // heights, so a floating image would drift and overlap. Inline keeps order and
-    // avoids collisions, at the cost of pixel-exact placement (that's Exact mode).
-    const blocks = (ap && Array.isArray(ap.blocks)) ? ap.blocks.slice() : [];
-    const imgs = (pg.images || []).map((im) => ({
-      kind: 'image', src: im.src, w: im.w, h: im.h, x: im.x || 0, y: im.y || 0,
-    }));
-    const stream = blocks.concat(imgs)
+    // Text and tables flow (editable) in reading order.
+    const blocks = ((ap && Array.isArray(ap.blocks)) ? ap.blocks.slice() : [])
       .sort((a, b) => (a.y || 0) - (b.y || 0) || (a.x || 0) - (b.x || 0));
 
-    for (const b of stream) {
+    // Images (discrete objects + raster-recovered photo/signature/QR/barcode) are
+    // placed as FLOATING, page-anchored drawings at their EXACT PDF coordinates —
+    // exactly like Exact/Layout mode — so a candidate photo stays pinned beside its
+    // section on the right instead of collapsing into a centred inline stack in the
+    // middle of the page. One carrier paragraph is enough: offsets are page-relative,
+    // so where it sits in the flow affects only z-order, not position.
+    const imgs = (pg.images || []);
+    if (imgs.length) {
+      const anchors = imgs.map((im) => {
+        const rId = addImage(im.src);
+        const id = drawId++;
+        return anchor(im.x || 0, im.y || 0, im.w, im.h, id, pictureGraphic(im.w, im.h, rId, id));
+      }).join('');
+      parts.push(`<w:p><w:r>${anchors}</w:r></w:p>`);
+    }
+
+    for (const b of blocks) {
       // `geom` blocks come from the geometry recovery (aiLayout.reconstructLeftovers)
       // and are already in reconstruct-native shape, so they go straight to the
       // shared table/paragraph builders; the AI-region blocks are converted first.
       if (b && b.kind === 'table') parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW)));
       else if (b && b.kind === 'paragraph') parts.push(styledPara(b.geom ? b : aiParaToBlock(b)));
-      else if (b && b.kind === 'image') parts.push(inlineImageParagraph(b, addImage));
     }
-    if (!stream.length) parts.push('<w:p/>');
+    if (!blocks.length && !imgs.length) parts.push('<w:p/>');
 
     const secW = TW(pg.w), secH = TW(pg.h);
+    const mar = TW(MPX);
     const sectPr = `<w:sectPr><w:pgSz w:w="${secW}" w:h="${secH}"/>`
-      + '<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>';
+      + `<w:pgMar w:top="${mar}" w:right="${mar}" w:bottom="${mar}" w:left="${mar}" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>`;
     if (pi < pages.length - 1) parts.push(`<w:p><w:pPr>${sectPr}</w:pPr></w:p>`);
     else parts.push(sectPr);
   });
