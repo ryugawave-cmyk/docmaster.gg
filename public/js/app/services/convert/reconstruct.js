@@ -246,7 +246,11 @@ function mergeStackedRows(band, cols) {
       const lineH = Math.min(prev.h || 12, ln.h || 12);
       const bCols = colsOf(ln.cells);
       const subset = [...bCols].every((c) => prev.colSet.has(c));
-      if (subset && bCols.size < prev.colSet.size && gap <= lineH * 1.2) {
+      // A wrapped/bilingual continuation line hugs the line above (tight leading);
+      // a genuine NEXT row — even one with a blank cell whose columns happen to be a
+      // subset — sits a full row-pitch below. Only the tight case merges, so ordinary
+      // data tables with empty cells keep their rows (don't over-merge other PDFs).
+      if (subset && bCols.size < prev.colSet.size && gap <= lineH * 0.5) {
         prev.cells = prev.cells.concat(ln.cells);
         prev.bottom = Math.max(prev.bottom, ln.bottom);
         prev.h = Math.max(prev.h, ln.h);
