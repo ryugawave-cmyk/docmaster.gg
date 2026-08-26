@@ -212,6 +212,12 @@ async function extractPage(pg, model) {
     // boxes are handled by the earlier defences (light fills don't count as ink, and
     // form boxes are detected+cleared as tables), not by this gate.
     if (regionStd(px, W, H, sx, sy, sw, sh) < 12) continue;
+    // A SMALL region whose interior has almost no edges is a flat/two-tone colour
+    // box (a grey placeholder rectangle, a two-cell swatch), not a picture: its high
+    // std comes from a single grey↔white boundary, not from real content. A QR, photo
+    // or signature is full of edges, so this only trips on near-featureless boxes —
+    // and only for small regions, so a large photo is never at risk.
+    if (areaFrac < 0.03 && regionDetail(px, W, H, sx, sy, sw, sh) < 0.03) continue;
 
     const crop = document.createElement('canvas');
     crop.width = sw; crop.height = sh;
@@ -248,10 +254,18 @@ function cellHasInk(px, W, H, x0, y0, cell) {
 /** Std-dev of luminance over a sampled region — a picture's internal contrast is
  *  high; a flat colour fill or bar is near-zero. */
 function regionStd(px, W, H, x, y, w, h) {
+  // Sample the INTERIOR (inset ~20% past any border). A bordered but flat-filled box
+  // — a grey/pale placeholder rectangle in a clean digital PDF — has a near-zero
+  // interior std even though its dark border alone would lift the full-region std
+  // over the gate and get it mis-recovered as a picture. A real photo/QR/signature
+  // carries contrast through its interior, so it still passes.
+  const ix = Math.round(Math.min(w, h) * 0.2);
+  let x0 = x, y0 = y, w0 = w, h0 = h;
+  if (w - 2 * ix >= 6 && h - 2 * ix >= 6) { x0 = x + ix; y0 = y + ix; w0 = w - 2 * ix; h0 = h - 2 * ix; }
   let n = 0, sum = 0, sum2 = 0;
-  const stepX = Math.max(1, Math.round(w / 40)), stepY = Math.max(1, Math.round(h / 40));
-  for (let yy = y; yy < y + h && yy < H; yy += stepY) {
-    for (let xx = x; xx < x + w && xx < W; xx += stepX) {
+  const stepX = Math.max(1, Math.round(w0 / 40)), stepY = Math.max(1, Math.round(h0 / 40));
+  for (let yy = y0; yy < y0 + h0 && yy < H; yy += stepY) {
+    for (let xx = x0; xx < x0 + w0 && xx < W; xx += stepX) {
       const i = (yy * W + xx) * 4;
       const l = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
       sum += l; sum2 += l * l; n += 1;
@@ -260,6 +274,27 @@ function regionStd(px, W, H, x, y, w, h) {
   if (!n) return 0;
   const mean = sum / n;
   return Math.sqrt(Math.max(0, sum2 / n - mean * mean));
+}
+
+/** Fraction of interior sample points that sit on a hard luminance edge. A picture,
+ *  QR or signature stroke is full of edges (high); a flat or two-plateau colour box
+ *  has almost none (a single boundary line). Interior-only, so a border doesn't
+ *  count. Used to reject small featureless boxes that pass the std gate. */
+function regionDetail(px, W, H, x, y, w, h) {
+  const ix = Math.round(Math.min(w, h) * 0.2);
+  let x0 = x, y0 = y, w0 = w, h0 = h;
+  if (w - 2 * ix >= 6 && h - 2 * ix >= 6) { x0 = x + ix; y0 = y + ix; w0 = w - 2 * ix; h0 = h - 2 * ix; }
+  const stepX = Math.max(1, Math.round(w0 / 48)), stepY = Math.max(1, Math.round(h0 / 48));
+  const lum = (xx, yy) => { const i = (yy * W + xx) * 4; return 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; };
+  let edges = 0, n = 0;
+  for (let yy = y0; yy + stepY < y0 + h0 && yy + stepY < H; yy += stepY) {
+    for (let xx = x0; xx + stepX < x0 + w0 && xx + stepX < W; xx += stepX) {
+      const l = lum(xx, yy);
+      if (Math.abs(l - lum(xx + stepX, yy)) > 28 || Math.abs(l - lum(xx, yy + stepY)) > 28) edges += 1;
+      n += 1;
+    }
+  }
+  return n ? edges / n : 0;
 }
 
 function markRect(grid, cols, rows, c0, r0, c1, r1) {
