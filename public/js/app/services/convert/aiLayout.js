@@ -217,7 +217,36 @@ export function buildTable(runs, box) {
     style: cellRuns.length ? styleOf(cellRuns) : null,
     align: cellRuns.length ? alignOf([cellRuns], { x: left[ci], w: Math.max(1, right[ci] - left[ci]) }) : 'left',
   })));
+  harmonizeColumnAlign(rows, ncol);
   return { kind: 'table', rows };
+}
+
+/**
+ * Snap each column's BODY cells to the column's dominant alignment. Per-cell
+ * inference is right most of the time but occasionally flips one outlier — a long
+ * value like "90% satisfaction" whose right edge nears the cell border reads as
+ * right-aligned while its short siblings ("95%", "$700K") read left — which looks
+ * misplaced in the column. A table column is visually uniform, so we let the body
+ * cells vote (by count) and apply the winner to every non-empty body cell.
+ *
+ * The HEADER row (row 0) is left untouched: headers are often centred/emphasised
+ * independently of their column's data, so it neither votes nor gets overwritten.
+ */
+function harmonizeColumnAlign(rows, ncol) {
+  if (rows.length < 3) return; // need ≥2 body rows for a meaningful majority
+  for (let ci = 0; ci < ncol; ci += 1) {
+    const tally = { left: 0, center: 0, right: 0 };
+    const cells = [];
+    for (let ri = 1; ri < rows.length; ri += 1) {
+      const c = rows[ri][ci];
+      if (!c || !c.text) continue; // empty cells don't vote and keep their default
+      tally[c.align] = (tally[c.align] || 0) + 1;
+      cells.push(c);
+    }
+    let best = 'left', bd = -1;
+    for (const a of ['left', 'center', 'right']) if (tally[a] > bd) { bd = tally[a]; best = a; }
+    for (const c of cells) c.align = best;
+  }
 }
 
 /** Build a paragraph/heading block from the runs inside a text/title region.

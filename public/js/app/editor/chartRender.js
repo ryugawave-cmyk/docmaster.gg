@@ -164,6 +164,11 @@ const DEFAULT_OPTIONS = () => ({
   showDataLabels: false, showPercentLabels: false, showCatLabels: true,
   showAxis: true, showAxisTitles: false, axisTitleX: 'Category', axisTitleY: 'Value',
   showGridlines: true, valueUnit: '',
+  // Value-axis scale: Auto (0 → nice max, 5 ticks) by default. When axisAuto is false
+  // the user's min / max / interval drive the scale; decimals + thousands + label size
+  // control how the tick numbers are formatted and sized.
+  axisAuto: true, axisMin: null, axisMax: null, axisStep: null,
+  axisDecimals: null, axisThousands: false, axisLabelSize: 10,
   background: '#ffffff', borderColor: '#e2e8f0', borderWidth: 1,
   shadow: false, opacity: 1, gradient: false, palette: 'office',
   threeD: { depth: 16, rotation: 25, perspective: 0, explode: 0, spacing: 0 },
@@ -234,21 +239,49 @@ const SPECIAL_SAMPLE = {
     options: { showCatLabels: true, showDataLabels: true } }),
 };
 
-/** A ready-to-insert chart of the given type, with representative sample data. */
+/** Strip a sample chart down to a BLANK template — no category names, no values, no
+ *  title text — while preserving structure/colours. Scatter/bubble keep their numeric X
+ *  column (that's data, not a label). Renderers show neutral placeholder geometry until
+ *  the user types their own data in Edit Data, so EVERY chart type behaves like the pie. */
+function blankTemplate(spec, fam) {
+  const scatter = fam === 'scatter';
+  return {
+    ...spec,
+    categories: (spec.categories || []).map((c, i) => (scatter ? String(i + 1) : '')),
+    series: (spec.series || []).map((s) => ({ ...s, values: (s.values || []).map(() => null) })),
+  };
+}
+
+/** A ready-to-insert chart: a BLANK template (no sample text/numbers) that renders as
+ *  neutral placeholder geometry and fills in live as the user enters data. Use
+ *  sampleChart() when you want representative example data (e.g. picker thumbnails). */
 export function defaultChart(typeId) {
+  const fam = (TYPE_META[typeId] || TYPE_META.pie).family;
+  return blankTemplate(sampleChart(typeId), fam);
+}
+
+/** The representative example data for a type (what defaultChart blanks out). */
+export function sampleChart(typeId) {
   const meta = TYPE_META[typeId] || TYPE_META.pie;
   const fam = meta.family;
   const o = DEFAULT_OPTIONS();
-  // A freshly inserted chart shows the user's OWN data — the category names and their
-  // values are ON so that editing the data immediately reads on the chart (business
-  // charts need their numbers visible). The auto chart-type TITLE and the generic
-  // "Series 1" LEGEND stay OFF (that was the unwanted clutter), as do the axis frame and
-  // gridlines. Everything remains individually toggleable in the Elements panel.
+  // Names + Values are ON by default (the "Show" ticks in the data editor start checked)
+  // so the moment the user types a category name / value it appears on the chart. A blank
+  // insert still looks clean because empty names don't render and unfilled placeholder
+  // cells draw no number. Title, legend and axis titles stay off (clutter); everything is
+  // individually toggleable in the Elements panel.
   Object.assign(o, {
     showTitle: false, showLegend: false,
     showCatLabels: true, showDataLabels: true, showPercentLabels: false,
     showAxis: false, showAxisTitles: false, showGridlines: false,
   });
+  // Cartesian families read as a real chart only WITH their frame — an axis
+  // baseline + value gridlines — so bars/lines/points sit on a grid instead of
+  // floating. Turn those on by default for the plotted families (matching the
+  // Professional Library preview tiles); radial/flow types (pie, funnel, radar,
+  // gauge, …) have no cartesian axis and stay clean.
+  const CARTESIAN = ['bar', 'line', 'area', 'scatter', 'combo', 'waterfall', 'candlestick', 'pareto', 'histogram', 'boxplot'];
+  if (CARTESIAN.includes(fam)) { o.showAxis = true; o.showGridlines = true; }
   const base = { type: typeId, title: chartTypeLabel(typeId), options: o, rotation: 0 };
 
   // New library families (and a few reused-family types) carry their own representative
@@ -318,7 +351,9 @@ export function normalizeChart(raw) {
     title: c.title || '',
     categories: Array.isArray(c.categories) ? c.categories.map((x) => (x == null ? '' : String(x))) : [],
     series: Array.isArray(c.series) && c.series.length
-      ? c.series.map((s) => ({ name: s.name || 'Series', values: (s.values || []).map(num), color: s.color || null }))
+      // Empty cells stay null (not 0) so a fresh/blank chart shows no numbers and the
+      // data editor renders an empty field the user can fill in; renderers coerce null→0.
+      ? c.series.map((s) => ({ name: s.name || 'Series', values: (s.values || []).map((v) => (v == null || v === '' ? null : num(v))), color: s.color || null }))
       : [{ name: 'Series 1', values: [], color: null }],
     colors: Array.isArray(c.colors) ? c.colors.slice() : [],
     // Per-point custom text annotations, keyed by point id ("p{i}" for pie-like,
@@ -341,12 +376,14 @@ const chartLabel = (c, id, x, y) => {
   const t = c.pointLabels && c.pointLabels[id];
   return (t == null || t === '') ? '' : chartText(x, y, t);
 };
+// A placeholder value (an unfilled cell) drives geometry but must NEVER draw a data label.
+const isPh = (v) => v != null && typeof v === 'object' && v.__ph === true;
 // The uniform per-point label for EVERY chart type: a user's custom text wins, else the
 // data value when Data Labels is on. Same call in every renderer → consistent behaviour.
 const ptLabel = (c, o, id, x, y, value) => {
   const t = c.pointLabels && c.pointLabels[id];
   if (t != null && t !== '') return chartText(x, y, t);
-  if (o.showDataLabels && value != null && value !== '' && Number.isFinite(+value)) return chartText(x, y, `${n2(value)}${o.valueUnit || ''}`);
+  if (o.showDataLabels && value != null && value !== '' && !isPh(value) && Number.isFinite(+value)) return chartText(x, y, `${n2(value)}${o.valueUnit || ''}`);
   return '';
 };
 
@@ -375,6 +412,54 @@ function niceMax(v) {
   const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
   return step * mag * Math.ceil(v / (step * mag));
 }
+
+/**
+ * Resolve the value-axis scale from the options + the data range.
+ *  • Auto (default): min 0 → a "nice" rounded max, 5 ticks — unchanged behaviour.
+ *  • Custom: the user's min / max / interval, validated so the chart never breaks
+ *    (max forced above min, tick count derived from the interval and clamped so the
+ *    labels stay legible / don't overlap).
+ * Returns { min, max, ticks }.
+ */
+export function axisScale(o, dataMax, dataMin = 0) {
+  o = o || {};
+  if (o.axisAuto === false) {
+    let min = Number(o.axisMin); if (!Number.isFinite(min)) min = 0;
+    let max = Number(o.axisMax);
+    if (!Number.isFinite(max) || max <= min) max = Math.max(niceMax(Math.max(dataMax, 1)), min + 1);
+    const step = Number(o.axisStep);
+    let ticks = (Number.isFinite(step) && step > 0) ? Math.round((max - min) / step) : 5;
+    ticks = Math.max(1, Math.min(20, ticks));
+    return { min, max, ticks };
+  }
+  return { min: Math.min(0, dataMin), max: niceMax(Math.max(1, dataMax)), ticks: 5 };
+}
+
+/** The value-axis scale for a series-based cartesian chart (line/area/combo). Honours
+ *  Auto vs Custom via axisScale; a 100% chart is fixed 0–100. Returns { min, max,
+ *  ticks, span }. */
+function seriesScale(o, c, { stacked = false, pct = false } = {}) {
+  if (pct) return { min: 0, max: 100, ticks: 5, span: 100 };
+  const dataMax = stacked
+    ? Math.max(1, ...(c.categories || []).map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0))))
+    : Math.max(1, ...c.series.flatMap((s) => (s.values || []).map((v) => Math.abs(v))));
+  const s = axisScale(o, dataMax);
+  return { ...s, span: (s.max - s.min) || 1 };
+}
+
+/** Format an axis tick number per the options (decimal places + optional thousands
+ *  grouping). Falls back to the compact default when no format is set. */
+function fmtAxisVal(v, o) {
+  o = o || {};
+  let n = Number(v); if (!Number.isFinite(n)) n = 0;
+  const d = Number(o.axisDecimals);
+  let s = (Number.isFinite(d) && d >= 0) ? n.toFixed(Math.min(6, d)) : String(n2(n));
+  if (o.axisThousands) {
+    const [ip, fp] = s.split('.');
+    s = ip.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fp != null ? `.${fp}` : '');
+  }
+  return s;
+}
 function textEl(x, y, str, { size = 12, anchor = 'middle', fill = '#334155', weight = 400 } = {}) {
   return `<text x="${n2(x)}" y="${n2(y)}" font-size="${size}" text-anchor="${anchor}" fill="${fill}" font-weight="${weight}" dominant-baseline="middle">${esc(str)}</text>`;
 }
@@ -402,6 +487,36 @@ export function renderChartSvg(rawChart, opts = {}) {
   const o = c.options;
   const pal = PALETTES[o.palette] || PALETTES.office;
   const meta = TYPE_META[c.type] || TYPE_META.pie;
+  // When the output is cropped to the content (opts.view), the full-canvas border
+  // rect would only bleed in as a stray partial line (e.g. its top edge floating
+  // above the plot). Suppress that frame while cropping — the document charts and
+  // exports use it, so no cropped chart shows the leftover line.
+  const cropping = !!(opts.view && opts.view.w > 0 && opts.view.h > 0);
+
+  // Unfilled cells (null) mean "not typed yet" — NOT zero. Render them as a light, equal
+  // placeholder so the chart stays whole while the user fills it in: a pie keeps all its
+  // slices (instead of collapsing to one full-circle disc the moment a single value is
+  // entered), bars/points don't vanish, and a blank insert is visible/editable. The
+  // placeholder scales to a quarter of the largest real value so it's always visible but
+  // never dominates the values you HAVE typed; an EXPLICIT 0 stays a real zero. While any
+  // placeholder is in play the data isn't complete, so numeric value labels are held back
+  // (no placeholder numbers leak onto the chart). Fully-typed data renders exactly as-is.
+  const reals = [];
+  for (const s of c.series) for (const v of (s.values || [])) if (v != null && Number.isFinite(+v) && +v !== 0) reals.push(Math.abs(+v));
+  const ph = reals.length ? Math.max(...reals) * 0.25 : 6;
+  const baseRows = Math.max(c.categories.length, ...c.series.map((s) => (s.values || []).length), 0);
+  const rows = reals.length ? baseRows : Math.max(baseRows, 4); // a fresh/blank chart shows ≥4 placeholder points
+  // A placeholder cell is a Number that ACTS like `ph` for every geometry/maths op but carries
+  // a flag so label code (isPh) skips it. That's the fix for "I add a value but it won't show":
+  // a value you HAVE typed draws its label normally, while the cells you haven't reached yet
+  // stay as silent placeholder slices/bars (no collapse, and no fake numbers on them).
+  const mkPh = () => Object.assign(new Number(ph), { __ph: true });
+  c.series = c.series.map((s) => {
+    const vals = (s.values || []).slice();
+    for (let i = 0; i < rows; i += 1) { if (vals[i] == null) vals[i] = mkPh(); }
+    return { ...s, values: vals };
+  });
+  while (c.categories.length < rows) c.categories.push('');
 
   const defs = [];
   if (o.gradient) {
@@ -455,7 +570,7 @@ export function renderChartSvg(rawChart, opts = {}) {
   };
 
   const parts = [];
-  parts.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="7" fill="${o.background || 'none'}"${o.borderWidth ? ` stroke="${o.borderColor}" stroke-width="${o.borderWidth}"` : ''}/>`);
+  parts.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="7" fill="${o.background || 'none'}"${o.borderWidth && !cropping ? ` stroke="${o.borderColor}" stroke-width="${o.borderWidth}"` : ''}/>`);
 
   let top = 12, bottom = H - 12, left = 14, right = W - 14;
   if (o.showTitle && c.title) {
@@ -493,6 +608,14 @@ export function renderChartSvg(rawChart, opts = {}) {
   // tick labels sit ~14px past the plot; axis titles get their own outer band.
   const cartesian = ['bar', 'line', 'area', 'scatter', 'combo', 'waterfall', 'candlestick', 'pareto', 'histogram', 'boxplot', 'gantt', 'timeline', 'matrix'].includes(meta.family);
   if (cartesian && (o.showCatLabels || o.showAxis)) bottom -= 16; // tick-label band
+  // Reserve a LEFT band for the labels that sit on the left edge — the numeric value
+  // scale (vertical charts) or the category names (horizontal bars) — anchored to the
+  // right of the axis. Without it a multi-character label ("1.6", "1000", "Category 2")
+  // renders past the canvas edge and its leading characters are clipped.
+  if (cartesian) {
+    if (meta.horizontal && o.showCatLabels) left += 42;      // category names on the left
+    else if (!meta.horizontal && o.showAxis) left += 30;     // numeric value scale on the left
+  }
   if (cartesian && o.showAxisTitles) { bottom -= 15; top += 14; } // X title below, Y title above
 
   const plot = { x: left, y: top, w: Math.max(20, right - left), h: Math.max(20, bottom - top) };
@@ -532,9 +655,22 @@ export function renderChartSvg(rawChart, opts = {}) {
   parts.push(body);
   if (legendBox) parts.push(legendPos === 'right' ? renderLegend(legend, legendBox, 'right') : renderLegendRows(legendRows, legendBox));
 
-  const inner = `${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${parts.join('')}`;
+  // The decorative full-canvas background rect stays OUTSIDE the measurable content
+  // group, so a caller can `getBBox()` the `.chart-content` group to learn the tight
+  // bounds of the actual graphic (chart body + legend) and crop the object to it —
+  // that's how an inserted chart fits its content instead of a large empty box.
+  const bg = parts[0];
+  const contentG = `<g class="chart-content">${parts.slice(1).join('')}</g>`;
+  const inner = `${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${bg}${contentG}`;
   const wrap = o.opacity < 1 ? `<g opacity="${n2(o.opacity)}">${inner}</g>` : inner;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter, Arial, sans-serif">${wrap}</svg>`;
+  // `opts.view` crops the output to a sub-rectangle (the measured content box); the
+  // SVG is then emitted at `outW`×`outH` so the picture fills the object with no
+  // surrounding dead space. Without it, behaviour is unchanged (full W×H canvas).
+  const v = opts.view && opts.view.w > 0 && opts.view.h > 0 ? opts.view : null;
+  const vb = v ? `${n2(v.x)} ${n2(v.y)} ${n2(v.w)} ${n2(v.h)}` : `0 0 ${W} ${H}`;
+  const outW = Math.max(1, Math.round(v ? (opts.outW || v.w) : W));
+  const outH = Math.max(1, Math.round(v ? (opts.outH || v.h) : H));
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="${vb}" font-family="Inter, Arial, sans-serif">${wrap}</svg>`;
 }
 
 function lighten(hex, amt = 0.2) {
@@ -713,7 +849,8 @@ function renderPie(c, meta, plot, g, o) {
       const [lx, ly0] = polar(ecx, ecy, lr, s.mid);
       const ly = ecy + (ly0 - ecy) * ky;
       const pct = ((Number(s.v) || 0) / total * 100);
-      const dataTxt = o.showPercentLabels ? `${n2(pct)}%` : (o.showDataLabels ? `${n2(s.v)}${o.valueUnit || ''}` : '');
+      const showVal = !isPh(s.v); // an unfilled placeholder slice draws its name but no value/percent
+      const dataTxt = (o.showPercentLabels && showVal) ? `${n2(pct)}%` : (o.showDataLabels && showVal ? `${n2(s.v)}${o.valueUnit || ''}` : '');
       const catTxt = o.showCatLabels ? clip(c.categories[s.i] || '', 14) : '';
       if (catTxt && dataTxt) {
         out.push(textEl(lx, ly - 6, catTxt, { size: 10, weight: 700, fill: '#ffffff' }));
@@ -741,20 +878,24 @@ function renderPie(c, meta, plot, g, o) {
 // Each layer is independently toggled: gridlines (showGrid), axis lines + value scale
 // (showAxis), category tick labels (showCat), and axis titles (titles.show). All text
 // is flat/horizontal — including the Y-axis title, kept horizontal above the axis.
-function axisFrame(plot, { xLabels, yMax, yMin = 0, showAxis, showGrid, showCat = true, horizontal = false, ticks = 5, titles = null }) {
+function axisFrame(plot, { xLabels, yMax, yMin = 0, showAxis, showGrid, showCat = true, horizontal = false, ticks = 5, titles = null, o = null }) {
   const out = [];
   const { x, y, w, h } = plot;
+  // Tick numbers honour the custom number format (decimals / thousands) and label
+  // font size when options are supplied; otherwise the compact default is used.
+  const fmt = (v) => (o ? fmtAxisVal(v, o) : n2(v));
+  const lblSize = (o && Number(o.axisLabelSize) > 0) ? Number(o.axisLabelSize) : 10;
   if (showGrid || showAxis) {
     for (let t = 0; t <= ticks; t += 1) {
       const val = yMin + (yMax - yMin) * (t / ticks);
       if (horizontal) {
         const gx = x + (w * t) / ticks;
         if (showGrid) out.push(`<line x1="${n2(gx)}" y1="${y}" x2="${n2(gx)}" y2="${y + h}" stroke="#eef2f7" stroke-width="1"/>`);
-        if (showAxis) out.push(textEl(gx, y + h + 12, n2(val), { size: 10, fill: '#94a3b8' }));
+        if (showAxis) out.push(textEl(gx, y + h + 12, fmt(val), { size: lblSize, fill: '#94a3b8' }));
       } else {
         const gy = y + h - (h * t) / ticks;
         if (showGrid) out.push(`<line x1="${x}" y1="${n2(gy)}" x2="${x + w}" y2="${n2(gy)}" stroke="#eef2f7" stroke-width="1"/>`);
-        if (showAxis) out.push(textEl(x - 6, gy, n2(val), { size: 10, anchor: 'end', fill: '#94a3b8' }));
+        if (showAxis) out.push(textEl(x - 6, gy, fmt(val), { size: lblSize, anchor: 'end', fill: '#94a3b8' }));
       }
     }
   }
@@ -793,13 +934,19 @@ function renderBar(c, meta, plot, g, o) {
   const out = [];
   const axisLen = horizontal ? plot.w : plot.h;
 
-  let yMax;
-  if (stacked) {
-    yMax = pct ? 100 : niceMax(Math.max(1, ...cats.map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0)))));
-  } else {
-    yMax = niceMax(Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v)))));
-  }
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o), horizontal }));
+  // Value-axis scale (Auto → 0…niceMax; Custom → the user's min/max/interval). A 100%
+  // stacked chart is always 0–100 by definition, so it opts out of custom scaling.
+  const dataMax = stacked
+    ? Math.max(1, ...cats.map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0))))
+    : Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v))));
+  const sc = (stacked && pct) ? { min: 0, max: 100, ticks: 5 } : axisScale(o, dataMax);
+  const yMax = sc.max, yMin = sc.min, span = (sc.max - sc.min) || 1;
+  // A bar's height as a fraction of the plot: zero-based scales keep the original
+  // magnitude look; a custom min>0 makes bars rise from that floor.
+  const barFrac = (v) => (yMin > 0
+    ? Math.max(0, Math.min(1, (v - yMin) / span))
+    : Math.min(1, Math.abs(v) / (yMax || 1)));
+  out.push(axisFrame(plot, { xLabels: cats, yMax, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o), horizontal }));
 
   const slot = (horizontal ? plot.h : plot.w) / Math.max(1, cats.length);
   // Substantial, size-proportional extrusion (capped to the slot so bars never collide).
@@ -809,10 +956,32 @@ function renderBar(c, meta, plot, g, o) {
   // Each bar records a hotspot (front-face centre) + optional custom label, so a user
   // can click that exact bar and type their own text/number on it.
   const annos = [];
-  const annotate = (si, ci, x, y, w, h, value) => {
+  const annotate = (si, ci, x, y, w, h) => {
     const id = `s${si}p${ci}`;
     chartHot(g, id, x + w / 2, y + h / 2);
-    annos.push(ptLabel(c, o, id, x + w / 2 + (depth ? depth / 2 : 0), y + h / 2 - (depth ? depth / 2 : 0), value));
+    // Label reads the RAW cell (so a placeholder/unfilled bar draws no number) — geometry
+    // above already used the coerced value for the bar size.
+    const raw = c.series[si] && c.series[si].values[ci];
+    const dxo = depth ? depth / 2 : 0;
+    // Placement: a stacked segment keeps its number centred inside the segment; a
+    // plain column/bar puts it just OUTSIDE the bar — above the top (columns) or past
+    // the end (bars) — on the white plot, so multi-digit numbers and custom text read
+    // cleanly instead of being squeezed inside a narrow bar. Clamped to the plot so a
+    // full-height/near-edge bar keeps its label just inside instead of spilling out.
+    let lx = x + w / 2 + dxo;
+    let ly = y + h / 2 - dxo;
+    if (!stacked) {
+      if (horizontal) {
+        const end = x + w;
+        lx = end + 15 + dxo;
+        if (lx > plot.x + plot.w - 4) lx = Math.max(x + 15, end - 15) + dxo; // near right edge → inside
+      } else {
+        const top = y - (depth || 0);
+        ly = top - 9;
+        if (ly < plot.y + 9) ly = y + 13; // near the ceiling → just inside the top
+      }
+    }
+    annos.push(ptLabel(c, o, id, lx, ly, raw));
   };
 
   cats.forEach((cat, ci) => {
@@ -836,7 +1005,7 @@ function renderBar(c, meta, plot, g, o) {
         }
         acc += val;
       } else {
-        const len = (Math.abs(v) / yMax) * axisLen;
+        const len = barFrac(v) * axisLen;
         if (horizontal) {
           const yc = plot.y + plot.h - slot * (ci + 0.5) - groupW / 2 + si * barW;
           out.push(bar3d(plot.x, yc, len, barW * 0.86, color, depth, false, g, o)); annotate(si, ci, plot.x, yc, len, barW * 0.86, v);
@@ -874,12 +1043,11 @@ function renderLine(c, meta, plot, g, o) {
   const stacked = !!meta.stacked;
   const out = [];
   const cum = cats.map(() => 0);
-  const yMax = niceMax(stacked
-    ? Math.max(1, ...cats.map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0))))
-    : Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v)))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = seriesScale(o, c, { stacked });
+  const yMax = sc.max, yMin = sc.min, span = sc.span;
+  out.push(axisFrame(plot, { xLabels: cats, yMax, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const px = (i) => plot.x + (plot.w * (i + 0.5)) / Math.max(1, cats.length);
-  const py = (v) => plot.y + plot.h - (v / yMax) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / span) * plot.h;
   c.series.forEach((s, si) => {
     const color = seriesColor(c, si, g.pal);
     const pts = cats.map((_, i) => {
@@ -912,14 +1080,13 @@ function renderLine3d(c, meta, plot, g, o) {
   const stacked = !!meta.stacked;
   const out = [];
   const cum = cats.map(() => 0);
-  const yMax = niceMax(stacked
-    ? Math.max(1, ...cats.map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0))))
-    : Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v)))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = seriesScale(o, c, { stacked });
+  const yMin = sc.min, span = sc.span;
+  out.push(axisFrame(plot, { xLabels: cats, yMax: sc.max, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const depth = Math.max(10, (o.threeD.depth || 16) * 0.7);
   const dx = depth * 0.8, dy = -depth * 0.8;
   const px = (i) => plot.x + (plot.w * (i + 0.5)) / Math.max(1, cats.length);
-  const py = (v) => plot.y + plot.h - (v / yMax) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / span) * plot.h;
   c.series.forEach((s, si) => {
     const color = seriesColor(c, si, g.pal);
     const pts = cats.map((_, i) => {
@@ -947,11 +1114,11 @@ function renderArea(c, meta, plot, g, o) {
   const stacked = !!meta.stacked;
   const pct = !!meta.pct;
   const out = [];
-  const yMax = stacked ? (pct ? 100 : niceMax(Math.max(1, ...cats.map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0))))))
-    : niceMax(Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v)))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = seriesScale(o, c, { stacked, pct });
+  const yMax = sc.max, yMin = sc.min, span = sc.span;
+  out.push(axisFrame(plot, { xLabels: cats, yMax, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const px = (i) => plot.x + (plot.w * (i + 0.5)) / Math.max(1, cats.length);
-  const py = (v) => plot.y + plot.h - (v / yMax) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / span) * plot.h;
   const cum = cats.map(() => 0);
   c.series.forEach((s, si) => {
     const color = seriesColor(c, si, g.pal);
@@ -963,7 +1130,7 @@ function renderArea(c, meta, plot, g, o) {
       return cum[i];
     });
     let d = tops.map((v, i) => `${i ? 'L' : 'M'} ${n2(px(i))} ${n2(py(v))}`).join(' ');
-    for (let i = cats.length - 1; i >= 0; i -= 1) d += ` L ${n2(px(i))} ${n2(py(stacked ? base[i] : 0))}`;
+    for (let i = cats.length - 1; i >= 0; i -= 1) d += ` L ${n2(px(i))} ${n2(py(stacked ? base[i] : yMin))}`;
     d += ' Z';
     out.push(`<path d="${d}" fill="${g.fillOf(color)}" fill-opacity="${stacked ? 0.9 : 0.55}" stroke="${color}" stroke-width="2"/>`);
     tops.forEach((v, i) => { const id = `s${si}p${i}`; chartHot(g, id, px(i), py(v)); out.push(ptLabel(c, o, id, px(i), py(v) - 12, s.values[i])); });
@@ -977,13 +1144,13 @@ function renderArea3d(c, meta, plot, g, o) {
   const stacked = !!meta.stacked;
   const pct = !!meta.pct;
   const out = [];
-  const yMax = stacked ? (pct ? 100 : niceMax(Math.max(1, ...cats.map((_, ci) => sum(c.series.map((s) => s.values[ci] || 0))))))
-    : niceMax(Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v)))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = seriesScale(o, c, { stacked, pct });
+  const yMin = sc.min, span = sc.span;
+  out.push(axisFrame(plot, { xLabels: cats, yMax: sc.max, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const depth = Math.max(12, (o.threeD.depth || 16) * 0.8);
   const dx = depth * 0.8, dy = -depth * 0.8;
   const px = (i) => plot.x + (plot.w * (i + 0.5)) / Math.max(1, cats.length);
-  const py = (v) => plot.y + plot.h - (v / yMax) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / span) * plot.h;
   const base = plot.y + plot.h;
   const cum = cats.map(() => 0);
   g.ensureBlur();
@@ -1029,10 +1196,11 @@ function renderScatter(c, meta, plot, g, o) {
   const xs = cats.map((v, i) => (Number.isFinite(+v) ? +v : i + 1));
   const xMax = niceMax(Math.max(1, ...xs));
   const ySeries = c.series[0] ? c.series[0].values : [];
-  const yMax = niceMax(Math.max(1, ...ySeries.map((v) => Math.abs(v))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const scY = axisScale(o, Math.max(1, ...ySeries.map((v) => Math.abs(v))));
+  const yMax = scY.max, yMin = scY.min, ySpan = (scY.max - scY.min) || 1;
+  out.push(axisFrame(plot, { xLabels: cats, yMax, yMin, ticks: scY.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const px = (v) => plot.x + (v / xMax) * plot.w;
-  const py = (v) => plot.y + plot.h - (v / yMax) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / ySpan) * plot.h;
   const color = seriesColor(c, 0, g.pal);
   const pts = xs.map((x, i) => [px(x), py(Number(ySeries[i]) || 0)]);
   if (meta.lines) out.push(`<path d="${pts.map((p, i) => `${i ? 'L' : 'M'} ${n2(p[0])} ${n2(p[1])}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2"/>`);
@@ -1113,7 +1281,7 @@ function renderFunnel(c, meta, plot, g, o) {
     // Stage/value text is independently toggleable (Category Labels / Data Labels).
     const parts = [];
     if (o.showCatLabels) parts.push(clip(cats[i] || '', 14));
-    if (o.showDataLabels || o.showPercentLabels) parts.push(`${n2(vals[i])}${o.valueUnit || ''}`);
+    if ((o.showDataLabels || o.showPercentLabels) && !isPh(vals[i])) parts.push(`${n2(vals[i])}${o.valueUnit || ''}`);
     if (parts.length) out.push(textEl(cx, (y0 + y1) / 2, parts.join('  '), { size: 11, weight: 600, fill: '#fff' }));
     const id = `p${i}`; chartHot(g, id, cx, (y0 + y1) / 2); out.push(chartLabel(c, id, cx, (y0 + y1) / 2));
   }
@@ -1127,11 +1295,13 @@ function renderWaterfall(c, meta, plot, g, o) {
   const out = [];
   let run = 0; const points = [];
   deltas.forEach((d, i) => { const start = i === 0 ? 0 : run; run += d; points.push({ start: i === 0 ? 0 : start, end: run, delta: d, first: i === 0 }); });
-  const maxV = niceMax(Math.max(1, ...points.map((p) => Math.max(p.start, p.end))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax: maxV, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const wvals = points.flatMap((p) => [p.start, p.end]);
+  const sc = axisScale(o, Math.max(1, ...wvals), Math.min(0, ...wvals));
+  const yMin = sc.min, span = (sc.max - sc.min) || 1;
+  out.push(axisFrame(plot, { xLabels: cats, yMax: sc.max, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const slot = plot.w / Math.max(1, points.length);
   const bw = slot * 0.6;
-  const py = (v) => plot.y + plot.h - (v / maxV) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / span) * plot.h;
   points.forEach((p, i) => {
     const x = plot.x + slot * (i + 0.5) - bw / 2;
     const top = py(Math.max(p.start, p.end));
@@ -1153,23 +1323,24 @@ function renderCombo(c, meta, plot, g, o) {
   const out = [];
   const colSeries = c.series.filter((_, i) => i === 0);
   const lineSeries = c.series.filter((_, i) => i > 0);
-  const yMax = niceMax(Math.max(1, ...c.series.flatMap((s) => s.values.map((v) => Math.abs(v)))));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = seriesScale(o, c);
+  const yMax = sc.max, yMin = sc.min, span = sc.span;
+  out.push(axisFrame(plot, { xLabels: cats, yMax, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const slot = plot.w / Math.max(1, cats.length);
   const bw = slot * 0.5;
   colSeries.forEach((s, si) => {
     const color = seriesColor(c, si, g.pal);
     cats.forEach((_, ci) => {
       const v = Number(s.values[ci]) || 0;
-      const len = (v / yMax) * plot.h;
+      const len = Math.max(0, Math.min(1, (v - yMin) / span)) * plot.h;
       const bx = plot.x + slot * (ci + 0.5) - bw / 2; const by = plot.y + plot.h - len;
       if (meta.d3) out.push(bar3d(bx, by, bw, len, color, Math.max(9, (o.threeD.depth || 16) * 0.7), true, g, o));
       else out.push(`<rect x="${n2(bx)}" y="${n2(by)}" width="${n2(bw)}" height="${n2(len)}" fill="${g.fillOf(color)}" rx="1.5"/>`);
-      const id = `s${si}p${ci}`; chartHot(g, id, bx + bw / 2, by + len / 2); out.push(ptLabel(c, o, id, bx + bw / 2, by + len / 2, v));
+      const id = `s${si}p${ci}`; chartHot(g, id, bx + bw / 2, by + len / 2); out.push(ptLabel(c, o, id, bx + bw / 2, by + len / 2, s.values[ci]));
     });
   });
   const px = (i) => plot.x + slot * (i + 0.5);
-  const py = (v) => plot.y + plot.h - (v / yMax) * plot.h;
+  const py = (v) => plot.y + plot.h - ((v - yMin) / span) * plot.h;
   lineSeries.forEach((s, si) => {
     const color = seriesColor(c, si + 1, g.pal);
     const pts = cats.map((_, i) => [px(i), py(Number(s.values[i]) || 0)]);
@@ -1205,7 +1376,10 @@ function squarify(values, x, y, w, h) {
     const t = vals.reduce((a, b) => a + b, 0) || 1;
     let acc = 0, idx = 0;
     for (; idx < vals.length - 1; idx += 1) { if (acc + vals[idx] >= t / 2) break; acc += vals[idx]; }
-    idx = Math.max(1, idx + 1);
+    // Clamp so BOTH halves keep at least one item — otherwise b is empty, a is the whole
+    // list, and rec() recurses on the same vals/box forever (stack overflow). Guards any
+    // distribution, including a dominant last value or near-equal placeholder data.
+    idx = Math.min(vals.length - 1, Math.max(1, idx + 1));
     const a = vals.slice(0, idx), b = vals.slice(idx);
     const fa = a.reduce((p, q) => p + q, 0) / t;
     if (W >= H) { rec(a, X, Y, W * fa, H); rec(b, X + W * fa, Y, W * (1 - fa), H); }
@@ -1226,9 +1400,14 @@ function renderCandle(c, meta, plot, g, o) {
   const priceH = volMode ? plot.h * 0.66 : plot.h;
   const pricePlot = { x: plot.x, y: plot.y, w: plot.w, h: priceH };
   const lows = low.map(num).filter(Number.isFinite), highs = high.map(num).filter(Number.isFinite);
-  const yMin = Math.floor(Math.min(...lows, ...open.map(num), ...close.map(num)) * 0.98);
-  const yMax = niceMax(Math.max(1, ...highs, ...open.map(num), ...close.map(num)));
-  out.push(axisFrame(pricePlot, { xLabels: cats, yMin, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels && !volMode, titles: axisTitlesOf(o) }));
+  // Price axis auto-fits to the data's low→high band (not zero-based — that's how
+  // financial charts read). A custom range overrides it via the shared scale.
+  const dataLo = Math.min(...lows, ...open.map(num), ...close.map(num));
+  const dataHi = Math.max(1, ...highs, ...open.map(num), ...close.map(num));
+  let yMin, yMax, ticks = 5;
+  if (o.axisAuto === false) { const sc = axisScale(o, dataHi, dataLo); yMin = sc.min; yMax = sc.max; ticks = sc.ticks; }
+  else { yMin = Math.floor(dataLo * 0.98); yMax = niceMax(dataHi); }
+  out.push(axisFrame(pricePlot, { xLabels: cats, yMin, yMax, ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels && !volMode, titles: axisTitlesOf(o) }));
   const slot = pricePlot.w / n, bw = slot * 0.5;
   const py = (v) => pricePlot.y + pricePlot.h - ((num(v) - yMin) / ((yMax - yMin) || 1)) * pricePlot.h;
   const UP = '#22a06b', DN = '#e04f5f';
@@ -1343,12 +1522,13 @@ function renderPareto(c, meta, plot, g, o) {
   const idx = vals.map((_, i) => i).sort((a, b) => vals[b] - vals[a]);
   const sorted = idx.map((i) => vals[i]), cats = idx.map((i) => c.categories[i]);
   const total = sum(sorted) || 1; let run = 0; const cum = sorted.map((v) => { run += v; return (run / total) * 100; });
-  const out = []; const yMax = niceMax(Math.max(1, ...sorted));
-  out.push(axisFrame(plot, { xLabels: cats, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const out = []; const sc = axisScale(o, Math.max(1, ...sorted));
+  const yMax = sc.max, yMin = sc.min, span = (sc.max - sc.min) || 1;
+  out.push(axisFrame(plot, { xLabels: cats, yMax, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const slot = plot.w / Math.max(1, sorted.length), bw = slot * 0.6;
   const depth = meta.d3 ? Math.max(9, (o.threeD.depth || 16) * 0.7) : 0;
   sorted.forEach((v, i) => {
-    const len = (v / yMax) * plot.h, x = plot.x + slot * (i + 0.5) - bw / 2, y = plot.y + plot.h - len, color = pointColor(c, idx[i], g.pal);
+    const len = Math.max(0, Math.min(1, (v - yMin) / span)) * plot.h, x = plot.x + slot * (i + 0.5) - bw / 2, y = plot.y + plot.h - len, color = pointColor(c, idx[i], g.pal);
     if (depth) out.push(bar3d(x, y, bw, len, color, depth, true, g, o));
     else out.push(`<rect x="${n2(x)}" y="${n2(y)}" width="${n2(bw)}" height="${n2(len)}" fill="${g.fillOf(color)}" rx="2"/>`);
     const id = `s0p${idx[i]}`; chartHot(g, id, x + bw / 2, y + len / 2); out.push(ptLabel(c, o, id, x + bw / 2, y - 10, v));
@@ -1369,12 +1549,13 @@ function renderHistogram(c, meta, plot, g, o) {
   const counts = new Array(bins).fill(0);
   raw.forEach((v) => { let b = Math.floor((v - lo) / bw0); b = Math.max(0, Math.min(bins - 1, b)); counts[b] += 1; });
   const labels = counts.map((_, i) => `${n2(lo + i * bw0)}`);
-  const yMax = niceMax(Math.max(1, ...counts));
-  out.push(axisFrame(plot, { xLabels: labels, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = axisScale(o, Math.max(1, ...counts));
+  const yMax = sc.max, yMin = sc.min, span = (sc.max - sc.min) || 1;
+  out.push(axisFrame(plot, { xLabels: labels, yMax, yMin, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const slot = plot.w / bins, bw = slot * 0.94, color = seriesColor(c, 0, g.pal);
   const depth = meta.d3 ? Math.max(9, (o.threeD.depth || 16) * 0.6) : 0;
   counts.forEach((ct, i) => {
-    const len = (ct / yMax) * plot.h, x = plot.x + slot * i + (slot - bw) / 2, y = plot.y + plot.h - len;
+    const len = Math.max(0, Math.min(1, (ct - yMin) / span)) * plot.h, x = plot.x + slot * i + (slot - bw) / 2, y = plot.y + plot.h - len;
     if (depth) out.push(bar3d(x, y, bw, len, color, depth, true, g, o));
     else out.push(`<rect x="${n2(x)}" y="${n2(y)}" width="${n2(bw)}" height="${n2(len)}" fill="${g.fillOf(color)}" stroke="#fff" stroke-width="0.75"/>`);
     const id = `s0p${i}`; chartHot(g, id, x + bw / 2, y + len / 2); out.push(ptLabel(c, o, id, x + bw / 2, y - 10, ct));
@@ -1387,8 +1568,9 @@ function renderBox(c, meta, plot, g, o) {
   const cats = c.categories, n = cats.length || 1, out = [];
   const gv = (si, i) => num(c.series[si] && c.series[si].values[i]);
   const all = []; for (let si = 0; si < 5; si += 1) for (let i = 0; i < n; i += 1) all.push(gv(si, i));
-  const yMax = niceMax(Math.max(1, ...all)), yMin = Math.min(0, ...all);
-  out.push(axisFrame(plot, { xLabels: cats, yMin, yMax, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
+  const sc = axisScale(o, Math.max(1, ...all), Math.min(0, ...all));
+  const yMin = sc.min, yMax = sc.max;
+  out.push(axisFrame(plot, { xLabels: cats, yMin, yMax, ticks: sc.ticks, o, showAxis: o.showAxis, showGrid: o.showGridlines, showCat: o.showCatLabels, titles: axisTitlesOf(o) }));
   const slot = plot.w / n, bw = slot * 0.42;
   const py = (v) => plot.y + plot.h - ((v - yMin) / ((yMax - yMin) || 1)) * plot.h;
   for (let i = 0; i < n; i += 1) {
@@ -1417,7 +1599,7 @@ function renderHeatmap(c, meta, plot, g, o) {
     const v = num(rows[r].values[col]), t = Math.max(0, Math.min(1, v / mx)), x = gx + col * cw, y = gy + r * ch;
     out.push(`<rect x="${n2(x + 1)}" y="${n2(y + 1)}" width="${n2(cw - 2)}" height="${n2(ch - 2)}" rx="3" fill="${mixColor('#eef3fb', base, t)}"/>`);
     const id = `s${r}p${col}`; chartHot(g, id, x + cw / 2, y + ch / 2);
-    const lbl = (c.pointLabels && c.pointLabels[id]) || (o.showDataLabels ? n2(v) : '');
+    const lbl = (c.pointLabels && c.pointLabels[id]) || (o.showDataLabels && !isPh(rows[r].values[col]) ? n2(v) : '');
     if (lbl) out.push(`<text x="${n2(x + cw / 2)}" y="${n2(y + ch / 2)}" font-size="11" text-anchor="middle" dominant-baseline="middle" fill="${t > 0.55 ? '#fff' : '#334155'}" font-weight="600">${esc(String(lbl))}</text>`);
   }
   rows.forEach((s, r) => out.push(textEl(plot.x + 4, gy + ch * (r + 0.5), clip(s.name, 12), { size: 10, anchor: 'start', fill: '#475569', weight: 600 })));
@@ -1461,7 +1643,7 @@ function renderTreemap(c, meta, plot, g, o) {
     const id = `p${it.i}`; chartHot(g, id, R.x + R.w / 2, R.y + R.h / 2);
     if (R.w > 34 && R.h > 20) {
       const custom = c.pointLabels && c.pointLabels[id];
-      const txt = custom || [o.showCatLabels ? clip(c.categories[it.i] || '', Math.floor(R.w / 8)) : '', o.showDataLabels ? n2(it.v) : ''].filter(Boolean).join(' ');
+      const txt = custom || [o.showCatLabels ? clip(c.categories[it.i] || '', Math.floor(R.w / 8)) : '', o.showDataLabels && !isPh(c.series[0] && c.series[0].values[it.i]) ? n2(it.v) : ''].filter(Boolean).join(' ');
       if (txt) out.push(`<text x="${n2(R.x + 6)}" y="${n2(R.y + 16)}" font-size="11" text-anchor="start" fill="#ffffff" font-weight="700" paint-order="stroke" stroke="rgba(0,0,0,0.15)" stroke-width="2">${esc(txt)}</text>`);
     }
   });
@@ -1498,7 +1680,7 @@ function renderTree(c, meta, plot, g, o) {
   cats.forEach((lab, i) => {
     const cxp = plot.x + plot.w * (i + 0.5) / n, x = cxp - bw / 2, color = pointColor(c, i, g.pal), midY = (rootY + bh + childY) / 2;
     out.push(`<path d="M ${n2(rootX)} ${n2(rootY + bh)} C ${n2(rootX)} ${n2(midY)}, ${n2(cxp)} ${n2(midY)}, ${n2(cxp)} ${n2(childY)}" fill="none" stroke="#cbd5e1" stroke-width="1.6"/>`);
-    const val = o.showDataLabels ? `  ${n2(num(c.series[0] && c.series[0].values[i]))}` : '';
+    const val = (o.showDataLabels && !isPh(c.series[0] && c.series[0].values[i])) ? `  ${n2(num(c.series[0] && c.series[0].values[i]))}` : '';
     out.push(nodeBox(x, childY, bw, bh, color, clip(lab, 13) + val, false));
     const id = `s0p${i}`; chartHot(g, id, cxp, childY + bh / 2); out.push(chartLabel(c, id, cxp, childY + bh / 2));
   });
@@ -1527,7 +1709,7 @@ function renderGantt(c, meta, plot, g, o) {
     if (pw > 0) out.push(`<rect x="${n2(x)}" y="${n2(by)}" width="${n2(pw)}" height="${n2(barH)}" rx="4" fill="${g.fillOf(color)}"/>`);
     if (o.showCatLabels) out.push(textEl(plot.x + 4, cy, clip(cats[i] || '', 15), { size: 11, anchor: 'start', fill: '#475569', weight: 600 }));
     const id = `s0p${i}`; chartHot(g, id, x + w / 2, cy);
-    const lbl = (c.pointLabels && c.pointLabels[id]) || (o.showDataLabels ? `${n2(prog[i])}%` : '');
+    const lbl = (c.pointLabels && c.pointLabels[id]) || (o.showDataLabels && !isPh(prog[i]) ? `${n2(prog[i])}%` : '');
     if (lbl) out.push(chartText(x + w + 16, cy, lbl));
   }
   return out.join('');

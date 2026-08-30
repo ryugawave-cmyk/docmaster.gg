@@ -32,7 +32,7 @@ const TOOLS = [
   { id: 'compress', icon: 'compress', label: 'Compress PDF', desc: 'Reduce the file size' },
   { id: 'word', icon: 'word', label: 'PDF → Word', desc: 'Editable .docx document' },
   { id: 'excel', icon: 'layers', label: 'PDF → Excel', desc: 'Spreadsheet .xlsx' },
-  { id: 'ppt', icon: 'template', label: 'PDF → PowerPoint', desc: 'Slides .pptx', locked: true },
+  { id: 'ppt', icon: 'template', label: 'PDF → PowerPoint', desc: 'Editable slides .pptx' },
   { id: 'jpg', icon: 'image', label: 'PDF → JPG', desc: 'JPEG image per page' },
   { id: 'png', icon: 'image', label: 'PDF → PNG', desc: 'PNG image per page' },
   { id: 'html', icon: 'link', label: 'PDF → HTML', desc: 'Standalone web page', locked: true },
@@ -48,20 +48,12 @@ const COMPRESS_LEVELS = [
   { id: 'high', label: 'High', hint: 'Smallest file, still sharp text', scale: 1.5, quality: 0.6 },
 ];
 
-// PDF → Word: the two headline modes get large, premium selection cards. Copy
-// is deliberately results-focused (no engine/beta/model-download detail) — users
-// pick based on what they'll do with the file, not how it's built.
+// PDF → Word: the two headline modes get large, premium selection cards. Just the
+// title (+ a "Recommended" badge) — no explanatory copy or keyword chips — so the
+// choice stays clean and users pick on the label alone.
 const WORD_MODE_CARDS = [
-  {
-    id: 'ai', icon: 'sparkle', title: 'Editable (AI)', recommended: true,
-    desc: 'AI reads the whole page — text, tables, images, signatures and colours — and recreates it as fully editable content. Runs on your device; the first use downloads the model and takes a little longer.',
-    bestFor: ['Forms', 'Invoices', 'Reports', 'Mixed layouts'],
-  },
-  {
-    id: 'exact', icon: 'document', title: 'Exact Copy',
-    desc: 'A pixel-perfect copy of the page. Text is editable; images and graphics stay fixed in the background.',
-    bestFor: ['Certificates', 'Government Documents'],
-  },
+  { id: 'ai', icon: 'sparkle', title: 'Editable (AI)', recommended: true },
+  { id: 'exact', icon: 'document', title: 'Exact Copy' },
 ];
 // Power-user modes, tucked into a collapsed "Advanced options" disclosure so the
 // primary choice stays uncluttered. Same wiring/values as the cards.
@@ -204,7 +196,10 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
         el('span', { class: 'bpx-exp__opt-desc' }, t.desc),
       ]),
       t.locked
-        ? el('span', { class: 'bpx-exp__opt-lock', html: renderIcon('lock'), 'aria-hidden': 'true' })
+        ? el('span', { class: 'bpx-exp__opt-locktag' }, [
+            el('span', { class: 'bpx-exp__opt-soon' }, 'Coming soon'),
+            el('span', { class: 'bpx-exp__opt-lock', html: renderIcon('lock'), 'aria-hidden': 'true' }),
+          ])
         : el('span', { class: 'bpx-exp__opt-chev', html: renderIcon('chevron') }),
     ])));
   }
@@ -227,7 +222,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
     compress: 'Reduce the file size without losing quality',
     word: 'Turn your PDF into a fully editable Word document',
     excel: 'Pull tables and text into an editable spreadsheet',
-    ppt: 'Rebuild each page as an editable slide',
+    ppt: 'Slides that look exactly like the PDF, with editable text',
     jpg: 'Export crisp JPEG images, one per page',
     png: 'Export lossless PNG images, one per page',
     html: 'Publish a clean, standalone web page',
@@ -282,7 +277,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
     // excel / ppt / html: no options
     const note = {
       excel: 'Extracts text into rows & columns, one sheet for the whole document.',
-      ppt: 'One slide per page with editable text boxes.',
+      ppt: 'One slide per page — the page kept exactly as it looks, with the text as editable boxes on top.',
       html: 'A clean, standalone HTML page with headings, paragraphs and images.',
     }[id];
     return [el('p', { class: 'bpx-exp__note' }, note || '')];
@@ -383,8 +378,6 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
             el('span', { class: 'bpx-exp__card-title' }, m.title),
             m.recommended ? el('span', { class: 'bpx-exp__card-badge' }, 'Recommended') : null,
           ]),
-          el('p', { class: 'bpx-exp__card-desc' }, m.desc),
-          el('div', { class: 'bpx-exp__card-chips' }, m.bestFor.map((b) => el('span', { class: 'bpx-exp__chip' }, b))),
         ]),
       ])));
 
@@ -515,8 +508,12 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
       // AI Layout also reads the page raster (the model looks at the image), so it
       // likewise doesn't require a pre-extracted text layer.
       const exactWord = id === 'word' && (settings.wordMode === 'exact' || settings.wordMode === 'ai');
+      // PowerPoint lays each page down as a raster backdrop with the editable text on
+      // top, so — like Exact/AI Word — it reproduces the page verbatim and is valid
+      // even for a scanned/image-only PDF (it simply carries no editable text boxes).
+      const exactLook = exactWord || id === 'ppt';
       const imagesOk = id === 'html' || (id === 'word' && settings.wordMode === 'layout');
-      const ok = exactWord || (imagesOk ? (content.hasText || content.hasImages) : content.hasText);
+      const ok = exactLook || (imagesOk ? (content.hasText || content.hasImages) : content.hasText);
       if (!ok) { setError(scannedMsg); return; }
     }
 
@@ -618,8 +615,13 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
         return;
       }
       if (id === 'ppt') {
+        // Exact-look slides: erase the extracted glyphs from each page raster so the
+        // raster backdrop is clean under the editable text overlay (same masking the
+        // Exact-Copy DOCX uses). Best-effort — a failure just uses the original bg.
+        setWorking('Preparing pages…');
+        const cleanBg = await maskExtractedText(model);
         setWorking('Building slides…');
-        const blob = modelToPptx(model, { name: getDocName() });
+        const blob = modelToPptx(model, { name: getDocName(), cleanBg });
         setDone({ blob, filename: `${base}.pptx` });
         return;
       }

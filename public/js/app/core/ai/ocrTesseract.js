@@ -15,10 +15,11 @@
  * vendored files aren't present yet, the first-use import rejects and the seam
  * surfaces a friendly toast instead of crashing.
  *
- * TO ENABLE (one-time vendoring step): drop a Tesseract.js v5 build under
- * `public/vendor/tesseract/` — the ESM entry, `worker.min.js`,
- * `tesseract-core.wasm.js` (+ `.wasm`), and the `<lang>.traineddata.gz` files you
- * support (e.g. `eng`, `hin`, `ara`, `tha`). Override any path via the options.
+ * TO ENABLE (one-time vendoring step): run `npm run vendor:ocr` (see
+ * scripts/vendor-ocr.mjs), which drops a Tesseract.js v5 build under
+ * `public/vendor/tesseract/` — the ESM entry, `worker.min.js`, the SIMD+LSTM core
+ * `tesseract-core-simd-lstm.wasm.js` (+ `.wasm`), and `eng.traineddata.gz`. Add more
+ * `<lang>.traineddata.gz` for other scripts (hin, ara, …). Override paths via opts.
  */
 import { setOcrLoader, OcrUnavailableError } from './ocr.js';
 
@@ -48,7 +49,10 @@ export function registerTesseractOcr(opts = {}) {
   const cfg = {
     enginePath: opts.enginePath || `${base}/tesseract.esm.min.js`,
     workerPath: opts.workerPath || `${base}/worker.min.js`,
-    corePath: opts.corePath || `${base}/tesseract-core.wasm.js`,
+    // SIMD + LSTM core (what the vendored set ships). Modern engines (Edge, Chrome,
+    // Firefox, Safari 16+) all support WASM SIMD; if a browser doesn't, recognition
+    // errors are caught and surfaced as a friendly note rather than crashing.
+    corePath: opts.corePath || `${base}/tesseract-core-simd-lstm.wasm.js`,
     langPath: opts.langPath || base, // where <lang>.traineddata(.gz) are served
     logger: opts.logger || null,
   };
@@ -96,6 +100,12 @@ async function createProvider(cfg) {
           .map((l) => ({
             text: String((l && l.text) || '').replace(/\s+$/, ''),
             confidence: typeof (l && l.confidence) === 'number' ? l.confidence / 100 : undefined,
+            // Per-line bounding box (image px). Lets callers place each recognised
+            // line at its real position (used by the positioned PDF→Doc transfer to
+            // turn baked banner/diagram text into editable boxes at the right spot).
+            bbox: l && l.bbox && typeof l.bbox.x0 === 'number'
+              ? { x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 }
+              : undefined,
           }))
           .filter((l) => l.text.length)
       : undefined;

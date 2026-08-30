@@ -11,6 +11,7 @@
  * layer, so its "text" is pixels that need OCR before it can be edited.
  */
 import { getDocument, CSS_UNITS, PDF_DOCUMENT_DEFAULTS, Util, OPS } from '../../workspace/pdf/pdfjs.js';
+import { fontPropsFromName } from './fontWeight.js';
 
 const MAX_PAGES = 300;          // safety cap for very large files
 const RASTER_SCALE = 1.6;       // render above CSS size for sharpness
@@ -77,7 +78,7 @@ export async function renderPdfToPages(file, onProgress) {
         // pixel-sampled colour if the operator list can't be read.
         let colors = null;
         if (opList) { try { colors = extractFillColors(opList); } catch { colors = null; } }
-        texts = extractPageTexts(tc, cssVp, px, canvas.width, canvas.height, colors);
+        texts = extractPageTexts(tc, cssVp, px, canvas.width, canvas.height, colors, page);
       }
     } catch { /* no text layer / extraction unsupported */ }
     textChars += pageChars;
@@ -123,11 +124,14 @@ export async function renderPdfToPages(file, onProgress) {
  * @param {number} cw  canvas width in px
  * @param {number} ch  canvas height in px
  * @param {ColorRun[]|null} colors  true fill colours from the content stream
+ * @param {any} [page]  PDF.js page proxy — its resolved font objects carry the real
+ *   PostScript font name, from which the true weight (bold/semibold/…) is read.
  * @returns {ExtractedText[]}
  */
-function extractPageTexts(tc, cssVp, px, cw, ch, colors) {
+function extractPageTexts(tc, cssVp, px, cw, ch, colors, page) {
   const out = [];
   const rf = cw / cssVp.width; // canvas px per CSS px
+  const fontCache = new Map(); // fontName → { bold, italic, weight } (one lookup per font)
   for (const it of tc.items) {
     if (!it || typeof it.str !== 'string' || !it.transform) continue;
     const str = it.str;
@@ -161,12 +165,18 @@ function extractPageTexts(tc, cssVp, px, cw, ch, colors) {
     // colour is only a fallback for runs the operator list didn't resolve.
     const trueColor = matchColor(colors, it.transform[4], it.transform[5], fontSize / CSS_UNITS);
 
+    // Real font weight/style from the embedded font (bold headings must STAY bold in
+    // the DOC). Cached per font id so each font is probed once.
+    let fp = fontCache.get(it.fontName);
+    if (!fp) { fp = getFontProps(page, it.fontName, style); fontCache.set(it.fontName, fp); }
+
     out.push({
       x: round1(left), y: round1(top), w: round1(width), h: round1(Math.max(height, 8)),
       text: str, fontSize: round1(fontSize),
       color: trueColor || (sample && sample.color) || '#000000',
       boxBg: sample ? sample.bg : '',
       fontFamily: mapFamily(style),
+      bold: fp.bold, italic: fp.italic, fontWeight: fp.weight,
     });
     if (out.length >= 2000) break; // pathological-page guard
   }
@@ -495,4 +505,29 @@ function mapFamily(style) {
   if (f.includes('mono')) return '"Courier New", Courier, monospace';
   if (f.includes('serif') && !f.includes('sans')) return 'Georgia, "Times New Roman", serif';
   return 'Arial, Helvetica, sans-serif';
+}
+
+/**
+ * Resolve a run's true weight/italic from the page's embedded font. PDF.js exposes
+ * the translated font on `page.commonObjs` under the text item's `fontName`; its
+ * `.name` is the original PostScript name (e.g. "ABCDEF+Arial-BoldMT") and it may
+ * also carry explicit `bold`/`italic`/`black` flags. We hand both to the shared,
+ * dependency-free inferrer (fontWeight.js) so the weight logic is unit-testable.
+ * Any failure (font not yet resolved) degrades to regular/upright.
+ * @returns {{bold:boolean, italic:boolean, weight:number}}
+ */
+function getFontProps(page, fontName, style) {
+  let name = '';
+  const flags = {};
+  try {
+    const objs = page && page.commonObjs;
+    const f = objs && (!objs.has || objs.has(fontName)) ? objs.get(fontName) : null;
+    if (f) {
+      name = f.name || f.loadedName || '';
+      if (typeof f.bold === 'boolean') flags.bold = f.bold;
+      if (typeof f.italic === 'boolean') flags.italic = f.italic;
+      if (flags.bold == null && f.black === true) flags.bold = true;
+    }
+  } catch { /* font object not resolved — fall back to the family hint below */ }
+  return fontPropsFromName(name, style?.fontFamily, flags);
 }

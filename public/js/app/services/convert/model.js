@@ -114,6 +114,8 @@ export function buildContentModel(model, name = 'document') {
           fontFamily: fontStack(o.fontFamily),
           bold: !!o.bold,
           italic: !!o.italic,
+          underline: !!o.underline,
+          fontWeight: o.fontWeight || (o.bold ? 700 : 400),
           color: normHex(o.color) || '111827',
           align: o.align || 'left',
           // `boxBg` is the page colour sampled behind an imported run; the

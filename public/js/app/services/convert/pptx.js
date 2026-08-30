@@ -3,11 +3,21 @@
  *
  * A .pptx is an OOXML ZIP with a fixed scaffold (presentation + one master, one
  * layout, one theme) and a slide part per page. Each PDF page becomes a slide
- * whose text runs are placed as absolutely-positioned, editable text boxes (EMU
- * coordinates) — real text, never a flattened page image. Slide size follows the
- * first page's dimensions.
+ * sized to that page.
+ *
+ * For a result that looks EXACTLY like the PDF yet stays editable, each slide is
+ * built in two layers (the same recipe as the position-faithful "Exact" DOCX):
+ *   1. a full-slide background PICTURE — the page raster, which already carries
+ *      every image, vector graphic, colour and background exactly; and
+ *   2. the PDF's text runs on top as absolutely-positioned, EDITABLE text boxes
+ *      (EMU coordinates), transparent and non-wrapping so each line stays exactly
+ *      where the PDF put it.
+ * The caller pre-erases the extracted glyphs from the raster (`opts.cleanBg`, from
+ * rasterImages.maskExtractedText) so the clean background shows through the
+ * transparent boxes with no doubling. With no `cleanBg`, the original page raster
+ * is used as the backdrop.
  */
-import { zipBlob } from '../zip.js';
+import { zipBlob, dataURLToBytes } from '../zip.js';
 import { xml, buildContentModel, PX_TO_PT } from './model.js';
 
 const EMU = (px) => Math.round(px * 9525);
@@ -16,8 +26,24 @@ export function modelToPptx(model, opts = {}) {
   const content = buildContentModel(model, opts.name);
   const pages = content.pages.length ? content.pages : [{ index: 0, w: content.PW, h: content.PH, runs: [] }];
   const cx = EMU(pages[0].w), cy = EMU(pages[0].h);
+  const cleanBg = opts.cleanBg || null;
 
-  const slides = pages.map((pg, i) => slideXml(pg, i + 1));
+  // One full-slide background raster per page (text-erased when available), added
+  // to the package as a media part and referenced by the slide's rels (rId2).
+  const media = []; // { name, bytes, ext }
+  const slideBg = pages.map((pg, pi) => {
+    const src = (cleanBg && cleanBg[pi]) || pg.bg || null;
+    if (!src) return null;
+    let bytes; try { bytes = dataURLToBytes(src); } catch { return null; }
+    const ext = /^data:image\/png/i.test(src) ? 'png' : 'jpg';
+    const name = `image${media.length + 1}.${ext}`;
+    media.push({ name, bytes, ext });
+    return name;
+  });
+  const usesJpg = media.some((m) => m.ext === 'jpg');
+  const usesPng = media.some((m) => m.ext === 'png');
+
+  const slides = pages.map((pg, i) => slideXml(pg, i + 1, slideBg[i], cx, cy));
 
   const presentation =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
@@ -43,6 +69,8 @@ export function modelToPptx(model, opts = {}) {
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
     '<Default Extension="xml" ContentType="application/xml"/>' +
+    (usesJpg ? '<Default Extension="jpg" ContentType="image/jpeg"/>' : '') +
+    (usesPng ? '<Default Extension="png" ContentType="image/png"/>' : '') +
     '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>' +
     '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>' +
     '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>' +
@@ -69,14 +97,27 @@ export function modelToPptx(model, opts = {}) {
   ];
   slides.forEach((s, i) => {
     entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: s });
-    entries.push({ name: `ppt/slides/_rels/slide${i + 1}.xml.rels`, data: SLIDE_RELS });
+    entries.push({ name: `ppt/slides/_rels/slide${i + 1}.xml.rels`, data: slideRels(slideBg[i]) });
   });
+  for (const m of media) entries.push({ name: `ppt/media/${m.name}`, data: m.bytes });
 
   return zipBlob(entries, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
 }
 
-function slideXml(pg, num) {
+function slideXml(pg, num, bgName, cx, cy) {
   let id = 1;
+  // Layer 1 — the full-slide page raster (rId2), placed FIRST so it sits at the
+  // bottom of the z-order with the editable text on top. Locked so a click doesn't
+  // grab the backdrop instead of the text over it.
+  const bgPic = bgName
+    ? (id += 1, '<p:pic><p:nvPicPr>' +
+      `<p:cNvPr id="${id}" name="Background"/>` +
+      '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>' +
+      '<p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>' +
+      `<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
+      '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>')
+    : '';
+  // Layer 2 — the editable text boxes.
   const shapes = pg.runs.map((r) => {
     id += 1;
     const sz = Math.round(r.fontSize * PX_TO_PT * 100); // a:sz is in hundredths of a point
@@ -84,6 +125,12 @@ function slideXml(pg, num) {
     const ital = r.italic ? ' i="1"' : '';
     const algn = r.align === 'center' ? ' algn="ctr"' : r.align === 'right' ? ' algn="r"' : ' algn="l"';
     const color = r.color || '111827';
+    // Text boxes are ALWAYS transparent: the page raster behind them already has the
+    // glyphs erased (rasterImages.maskExtractedText), so no fill is needed to hide a
+    // baked original. Crucially, an opaque fill would be actively harmful here —
+    // adjacent single-line boxes sit only ~1px apart, so a filled box would paint
+    // over the line above/below and clip it (the "jumbled/overlapping text" bug).
+    const fill = '<a:noFill/>';
     const paras = String(r.text).split('\n').map((line) =>
       `<a:p><a:pPr${algn}/><a:r><a:rPr lang="en-US" sz="${sz}"${bold}${ital}>` +
       `<a:solidFill><a:srgbClr val="${xml(color)}"/></a:solidFill></a:rPr>` +
@@ -93,8 +140,12 @@ function slideXml(pg, num) {
       '<p:spPr>' +
       `<a:xfrm><a:off x="${EMU(r.x)}" y="${EMU(r.y)}"/><a:ext cx="${EMU(Math.max(r.w, r.fontSize))}" cy="${EMU(Math.max(r.h, r.fontSize))}"/></a:xfrm>` +
       '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>' +
+      fill +
       '</p:spPr>' +
-      '<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0"><a:spAutoFit/></a:bodyPr><a:lstStyle/>' +
+      // wrap="none": keep each run on ONE line exactly as in the PDF. With wrapping
+      // on, a renderer that substitutes a slightly wider font re-flows the text to a
+      // second line, which then stacks down and overlaps the rows/cells below.
+      '<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0"><a:spAutoFit/></a:bodyPr><a:lstStyle/>' +
       (paras || '<a:p/>') +
       '</p:txBody></p:sp>';
   }).join('');
@@ -106,6 +157,7 @@ function slideXml(pg, num) {
     '<p:cSld><p:spTree>' +
     '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
     '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>' +
+    bgPic +
     shapes +
     '</p:spTree></p:cSld><p:clrMapOvr><a:overrideClrMapping ' +
     'bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" ' +
@@ -114,20 +166,24 @@ function slideXml(pg, num) {
 
 /* ------------------------- fixed scaffold parts -------------------------- */
 
-const SLIDE_RELS =
-  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
-  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>' +
-  '</Relationships>';
+/** Per-slide relationships: always the layout (rId1), plus the background image
+ *  (rId2 → ../media/<bgName>) when this slide has a page raster behind its text. */
+function slideRels(bgName) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>' +
+    (bgName ? `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${bgName}"/>` : '') +
+    '</Relationships>';
+}
 
-const MASTER_RELS =
+export const MASTER_RELS =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>' +
   '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>' +
   '</Relationships>';
 
-const LAYOUT_RELS =
+export const LAYOUT_RELS =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>' +
@@ -138,7 +194,7 @@ const EMPTY_TREE =
   '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>' +
   '</p:spTree></p:cSld>';
 
-const SLIDE_MASTER =
+export const SLIDE_MASTER =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   '<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
@@ -150,7 +206,7 @@ const SLIDE_MASTER =
   '<p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>' +
   '</p:sldMaster>';
 
-const SLIDE_LAYOUT =
+export const SLIDE_LAYOUT =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   '<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
@@ -158,7 +214,7 @@ const SLIDE_LAYOUT =
   EMPTY_TREE +
   '</p:sldLayout>';
 
-const THEME =
+export const THEME =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">' +
   '<a:themeElements><a:clrScheme name="Office">' +

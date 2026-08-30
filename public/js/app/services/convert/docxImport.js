@@ -12,10 +12,14 @@
  */
 import {
   createDocument, createParagraph, createRun, createListBlock,
-  createImageBlock, createTableBlock, DEFAULT_MARKS,
+  createImageBlock, createTableBlock, DEFAULT_MARKS, DEFAULT_PAGE,
 } from '../../model/documentModel.js';
 
 const PT_TO_PX = 96 / 72;
+const EMU_PER_PX = 9525;                 // OOXML EMU per CSS px @96dpi
+const PAGE_GAP_PX = 28;                  // must match documentEditor.js PAGE_GAP (page-stack gap)
+const TWIP_TO_PX = (tw) => (parseInt(tw, 10) / 20) * PT_TO_PX;   // 20 twips = 1pt
+const HALFPT_TO_PX = (hp) => (parseInt(hp, 10) / 2) * PT_TO_PX;  // w:sz is half-points
 
 /** @param {ArrayBuffer} buf @param {string} [title] */
 export async function docxToBlockModel(buf, title = 'Document') {
@@ -28,18 +32,61 @@ export async function docxToBlockModel(buf, title = 'Document') {
   const relsXml = files.get('word/_rels/document.xml.rels');
   const rels = relsXml ? parseRels(dec.decode(relsXml)) : {};
   const numbering = files.get('word/numbering.xml') ? parseNumbering(dec.decode(files.get('word/numbering.xml'))) : {};
+  // Styles carry the document defaults (font/size/spacing) and named paragraph
+  // styles (Heading 1…, etc.). Real-world .docx put most formatting there rather
+  // than inline, so resolving them is what keeps sizes and spacing faithful.
+  const stylesXml = files.get('word/styles.xml');
+  const styleInfo = stylesXml ? parseStyles(dec.decode(stylesXml)) : { def: {}, byId: {} };
 
   const body = xml.getElementsByTagName('w:body')[0];
   if (!body) return createDocument({ title, source: 'docx' });
+
+  // Section properties → page size / margins (twips → px). Falls back to the model
+  // default (A4) when absent, so a Letter document with 1" margins reproduces its
+  // real content width — which drives wrapping and therefore pagination.
+  const page = { ...DEFAULT_PAGE, ...readPageSetup(body) };
+
+  // Modal body font size (px), used to infer headings in documents that style
+  // their headings with a large/bold font instead of Word heading styles — very
+  // common in real-world and exported .docx. Without this the left outline stays
+  // empty because nothing is tagged h1/h2/h3.
+  const bodySize = computeBodySize(body);
 
   const blocks = [];
   let pendingList = null; // accumulate consecutive list paragraphs
 
   const flushList = () => { if (pendingList) { blocks.push(pendingList.block); pendingList = null; } };
 
+  // Page tracking. A source page break (Word section/page break, or the per-page
+  // section breaks our PDF→Word "layout" exporter emits) is carried as a forced
+  // break on the NEXT block so the editor keeps the source's page count instead of
+  // reflowing. `pageIndex` also lets us lift each page's floating images onto their
+  // real page in the editor's single continuous page-stack (stride mirrors the
+  // editor's page height + PAGE_GAP), so later-page pictures don't pile on page 1.
+  const stride = (page.height || DEFAULT_PAGE.height) + PAGE_GAP_PX;
+  let pageIndex = 0;
+  let pendingBreak = false;
+  // A floating image is positioned absolutely and is excluded from the editor's
+  // flow pagination, so a forced break must NOT land on it — it would be ignored
+  // and the page wouldn't break. Carry the break to the next in-flow block instead.
+  const isFloating = (blk) => blk && blk.type === 'image' && blk.left != null && blk.top != null;
+  const applyBreak = (blk) => {
+    if (blk && pendingBreak && !isFloating(blk)) { blk.breakBefore = true; pendingBreak = false; }
+    return blk;
+  };
+  const placeFloat = (blk) => {
+    if (blk && blk.type === 'image' && blk.top != null && pageIndex > 0) blk.top += pageIndex * stride;
+    return blk;
+  };
+
   for (const node of Array.from(body.children)) {
     const tag = local(node.tagName);
     if (tag === 'p') {
+      const brk = paragraphBreak(node);
+      // A page break that STARTS a new page on this paragraph (Word manual page
+      // break / "page break before"): advance now so this block sits on the new page.
+      if (brk === 'before' || brk === 'manual') { pageIndex += 1; pendingBreak = true; }
+
       const listInfo = paragraphListInfo(node, numbering);
       if (listInfo) {
         const runs = readRuns(node, files, rels);
@@ -47,18 +94,35 @@ export async function docxToBlockModel(buf, title = 'Document') {
           flushList();
           pendingList = { ordered: listInfo.ordered, block: createListBlock({ ordered: listInfo.ordered, items: [] }) };
           pendingList.block.items = [];
+          applyBreak(pendingList.block);
         }
         pendingList.block.items.push({ runs: runs.length ? runs : [createRun('')] });
+        if (brk === 'section') { flushList(); pageIndex += 1; pendingBreak = true; } // section break after the list item
         continue;
       }
       flushList();
-      // A paragraph may itself contain an inline image → emit an image block.
-      const imgBlock = readInlineImage(node, files, rels);
-      if (imgBlock) { blocks.push(imgBlock); continue; }
-      blocks.push(readParagraph(node, files, rels));
+      // A paragraph may anchor one or more drawings (inline OR floating). Emit those
+      // image blocks first (a side-wrap/float needs to precede the text it wraps),
+      // then the paragraph's own text — so an anchored picture never drops the
+      // paragraph's words the way "image-only" handling used to.
+      const drawings = readDrawings(node, files, rels, page).map(placeFloat);
+      const para = readParagraph(node, files, rels, bodySize, styleInfo);
+      const hasText = para.runs.some((r) => (r.text || '').trim());
+      // A pure section-break carrier (no text, no image) — the marker our layout
+      // exporter drops between pages — just advances the page; nothing to emit.
+      if (brk === 'section' && !hasText && !drawings.length) { pageIndex += 1; pendingBreak = true; continue; }
+      if (drawings.length) {
+        applyBreak(drawings[0]);
+        for (const d of drawings) blocks.push(d);
+        if (hasText) { applyBreak(para); blocks.push(para); }
+      } else {
+        applyBreak(para);
+        blocks.push(para);
+      }
+      if (brk === 'section') { pageIndex += 1; pendingBreak = true; } // section break trails this paragraph
     } else if (tag === 'tbl') {
       flushList();
-      blocks.push(readTable(node, files, rels));
+      blocks.push(applyBreak(readTable(node, files, rels)));
     }
   }
   flushList();
@@ -66,29 +130,217 @@ export async function docxToBlockModel(buf, title = 'Document') {
   return createDocument({
     title,
     source: 'docx',
+    page,
     blocks: blocks.length ? blocks : [createParagraph()],
   });
 }
 
-/* ------------------------------- paragraph -------------------------------- */
+/* ------------------------- styles / section setup ------------------------- */
 
-function readParagraph(pNode, files, rels) {
-  const pPr = child(pNode, 'pPr');
-  const styleVal = pPr ? attr(child(pPr, 'pStyle'), 'w:val') : '';
-  const tag = /heading\s*1|heading1/i.test(styleVal) ? 'h1'
-    : /heading\s*2|heading2/i.test(styleVal) ? 'h2'
-    : /heading\s*3|heading3/i.test(styleVal) ? 'h3' : 'p';
-  const jc = pPr ? attr(child(pPr, 'jc'), 'w:val') : '';
-  const align = jc === 'both' ? 'justify' : (jc === 'center' || jc === 'right' ? jc : 'left');
-  const runs = readRuns(pNode, files, rels);
-  return createParagraph({ tag, style: { align }, runs: runs.length ? runs : [createRun('')] });
+/** Parse styles.xml into { def, byId }: document defaults and per-style formatting
+ *  (font size in px, family, paragraph spacing/indent), each style noting `basedOn`
+ *  so the inheritance chain can be resolved. Best-effort; unknown parts ignored. */
+function parseStyles(text) {
+  const out = { def: {}, byId: {} };
+  try {
+    const xml = new DOMParser().parseFromString(text, 'application/xml');
+    const dd = xml.getElementsByTagName('w:docDefaults')[0];
+    if (dd) {
+      const rpr = dd.getElementsByTagName('w:rPr')[0];
+      const ppr = dd.getElementsByTagName('w:pPr')[0];
+      Object.assign(out.def, readRunDefaults(rpr), readParaSpacing(ppr));
+    }
+    for (const st of Array.from(xml.getElementsByTagName('w:style'))) {
+      if (attr(st, 'w:type') !== 'paragraph') continue;
+      const id = attr(st, 'w:styleId');
+      if (!id) continue;
+      out.byId[id] = {
+        ...readRunDefaults(child(st, 'rPr')),
+        ...readParaSpacing(child(st, 'pPr')),
+        basedOn: attr(child(st, 'basedOn'), 'w:val') || null,
+      };
+    }
+  } catch { /* leave defaults empty */ }
+  return out;
 }
 
-function readRuns(container, files, rels) {
+/** Merge a paragraph style with everything it is basedOn (root → leaf), so a style
+ *  that only overrides, say, spacing still inherits its parent's size. */
+function styleChain(styleInfo, id, depth = 0) {
+  const s = id && styleInfo.byId[id];
+  if (!s || depth > 10) return {};
+  const { basedOn, ...own } = s;
+  return { ...styleChain(styleInfo, basedOn, depth + 1), ...own };
+}
+
+/** { sizePx?, fontFamily? } from an rPr (run properties). */
+function readRunDefaults(rpr) {
+  if (!rpr) return {};
+  const o = {};
+  const sz = attr(child(rpr, 'sz'), 'w:val');
+  if (sz) o.sizePx = Math.round(HALFPT_TO_PX(sz));
+  const f = child(rpr, 'rFonts');
+  if (f) { const name = attr(f, 'w:ascii') || attr(f, 'w:hAnsi'); if (name) o.fontFamily = name; }
+  return o;
+}
+
+/** { spaceBefore?, spaceAfter?, lineHeight?|lineHeightPx?, indentLeft? } from a pPr. */
+function readParaSpacing(ppr) {
+  if (!ppr) return {};
+  const o = {};
+  const sp = child(ppr, 'spacing');
+  if (sp) {
+    const before = attr(sp, 'w:before');
+    const after = attr(sp, 'w:after');
+    if (before != null) o.spaceBefore = Math.round(TWIP_TO_PX(before));
+    if (after != null) o.spaceAfter = Math.round(TWIP_TO_PX(after));
+    const line = attr(sp, 'w:line');
+    if (line != null) {
+      const rule = attr(sp, 'w:lineRule') || 'auto';
+      if (rule === 'auto') o.lineHeight = parseInt(line, 10) / 240; // 240 = single
+      else o.lineHeightPx = Math.round(TWIP_TO_PX(line));           // exact / atLeast
+    }
+  }
+  const ind = child(ppr, 'ind');
+  if (ind) {
+    const left = attr(ind, 'w:left') ?? attr(ind, 'w:start');
+    if (left != null) o.indentLeft = Math.max(0, Math.round(TWIP_TO_PX(left)));
+  }
+  return o;
+}
+
+/** Page size + margin (px) from the body's section properties. */
+function readPageSetup(body) {
+  const sect = Array.from(body.getElementsByTagName('w:sectPr')).pop();
+  if (!sect) return {};
+  const page = {};
+  const pgSz = child(sect, 'pgSz');
+  if (pgSz) {
+    const w = attr(pgSz, 'w:w'); const h = attr(pgSz, 'w:h');
+    if (w) page.width = Math.round(TWIP_TO_PX(w));
+    if (h) page.height = Math.round(TWIP_TO_PX(h));
+  }
+  const pgMar = child(sect, 'pgMar');
+  if (pgMar) {
+    // The model carries a single margin used on all four sides; the left margin is
+    // the most representative (Word documents are almost always symmetric).
+    const l = attr(pgMar, 'w:left');
+    if (l != null) page.margin = Math.max(0, Math.round(TWIP_TO_PX(l)));
+  }
+  return page;
+}
+
+/* ------------------------------- paragraph -------------------------------- */
+
+function readParagraph(pNode, files, rels, bodySize = 16, styleInfo = { def: {}, byId: {} }) {
+  const pPr = child(pNode, 'pPr');
+  const jc = pPr ? attr(child(pPr, 'jc'), 'w:val') : '';
+  const align = jc === 'both' ? 'justify' : (jc === 'center' || jc === 'right' ? jc : 'left');
+  // Effective formatting = document defaults ← paragraph style chain ← inline pPr.
+  // This is what makes size/spacing faithful when Word keeps them in the style.
+  const styleId = attr(child(pPr, 'pStyle'), 'w:val') || 'Normal';
+  const eff = { ...styleInfo.def, ...styleChain(styleInfo, styleId), ...readParaSpacing(pPr) };
+  const defaults = {
+    fontSize: eff.sizePx || undefined,
+    fontFamily: eff.fontFamily || undefined,
+  };
+  const runs = readRuns(pNode, files, rels, defaults);
+  // Heading level: prefer an explicit Word style / outline level; otherwise infer
+  // it from the paragraph's font size so font-styled headings still populate the
+  // document outline (they're the common case — see computeBodySize).
+  const tag = explicitHeadingTag(pPr) || inferHeadingTag(runs, bodySize) || 'p';
+
+  const style = { align };
+  if (eff.spaceBefore != null) style.spaceBefore = eff.spaceBefore;
+  if (eff.spaceAfter != null) style.spaceAfter = eff.spaceAfter;
+  if (eff.lineHeight != null) style.lineHeight = eff.lineHeight;
+  if (eff.lineHeightPx != null) style.lineHeightPx = eff.lineHeightPx;
+  if (eff.indentLeft) style.indentLeft = eff.indentLeft;
+  return createParagraph({ tag, style, runs: runs.length ? runs : [createRun('')] });
+}
+
+/**
+ * Detect a page break associated with a paragraph, returning:
+ *   • 'before'  — the paragraph starts a new page (`<w:pageBreakBefore/>`)
+ *   • 'manual'  — a manual page break run (`<w:br w:type="page"/>`)
+ *   • 'section' — a section break in the paragraph's pPr (`<w:sectPr>`, non-continuous),
+ *                 i.e. the paragraph ENDS a section; the next content starts a page.
+ *   • null      — no break.
+ * Continuous section breaks (same page) are intentionally ignored.
+ */
+function paragraphBreak(node) {
+  const pPr = child(node, 'pPr');
+  if (child(pPr, 'pageBreakBefore')) return 'before';
+  const sect = child(pPr, 'sectPr');
+  if (sect && attr(child(sect, 'type'), 'w:val') !== 'continuous') return 'section';
+  for (const br of Array.from(node.getElementsByTagName('w:br'))) {
+    if ((br.getAttribute('w:type') || br.getAttribute('type')) === 'page') return 'manual';
+  }
+  return null;
+}
+
+/** Heading level from a paragraph's Word style id or outline level, if any. */
+function explicitHeadingTag(pPr) {
+  if (!pPr) return null;
+  const styleVal = attr(child(pPr, 'pStyle'), 'w:val') || '';
+  if (/heading\s*1|heading1|^title$/i.test(styleVal)) return 'h1';
+  if (/heading\s*2|heading2|^subtitle$/i.test(styleVal)) return 'h2';
+  if (/heading\s*3|heading3/i.test(styleVal)) return 'h3';
+  const lvl = attr(child(pPr, 'outlineLvl'), 'w:val');
+  if (lvl != null) {
+    const n = parseInt(lvl, 10);
+    if (n === 0) return 'h1';
+    if (n === 1) return 'h2';
+    if (n >= 2 && n <= 8) return 'h3';
+  }
+  return null;
+}
+
+/** Infer a heading level from font size for documents that don't use heading
+ *  styles: a short paragraph whose dominant run size is meaningfully larger than
+ *  the body text is treated as a heading, tiered by how much larger it is. */
+function inferHeadingTag(runs, bodySize) {
+  let total = 0;
+  const byChar = new Map(); // fontSize(px) → chars at that size
+  for (const r of runs) {
+    const len = (r.text || '').length;
+    if (!len) continue;
+    const sz = (r.marks && r.marks.fontSize) || bodySize;
+    byChar.set(sz, (byChar.get(sz) || 0) + len);
+    total += len;
+  }
+  // Headings are short lines; a long paragraph in a big font is still body text.
+  if (!total || total > 200) return null;
+  let size = bodySize, most = -1;
+  for (const [sz, len] of byChar) if (len > most) { most = len; size = sz; }
+  const ratio = size / (bodySize || 16);
+  if (ratio >= 1.8) return 'h1';
+  if (ratio >= 1.35) return 'h2';
+  if (ratio >= 1.15) return 'h3';
+  return null;
+}
+
+/** Modal body font size (px): the run size that covers the most characters. */
+function computeBodySize(body) {
+  const byChar = new Map();
+  for (const r of Array.from(body.getElementsByTagName('w:r'))) {
+    let text = '';
+    for (const t of Array.from(r.children)) if (local(t.tagName) === 't') text += t.textContent;
+    if (!text.trim()) continue;
+    const sz = attr(child(child(r, 'rPr'), 'sz'), 'w:val');
+    const px = sz ? Math.round((parseInt(sz, 10) / 2) * PT_TO_PX) : 16;
+    byChar.set(px, (byChar.get(px) || 0) + text.length);
+  }
+  let size = 16, most = -1;
+  for (const [px, len] of byChar) if (len > most) { most = len; size = px; }
+  return size;
+}
+
+function readRuns(container, files, rels, defaults = {}) {
   const runs = [];
   for (const r of Array.from(container.getElementsByTagName('w:r'))) {
     const rPr = child(r, 'rPr');
-    const marks = readMarks(rPr);
+    const marks = readMarks(rPr, defaults);
     let text = '';
     for (const t of Array.from(r.children)) {
       const tl = local(t.tagName);
@@ -101,19 +353,25 @@ function readRuns(container, files, rels) {
   return runs;
 }
 
-function readMarks(rPr) {
-  if (!rPr) return {};
+function readMarks(rPr, defaults = {}) {
   const m = {};
-  if (child(rPr, 'b') && attr(child(rPr, 'b'), 'w:val') !== 'false' && attr(child(rPr, 'b'), 'w:val') !== '0') m.bold = true;
-  if (child(rPr, 'i') && attr(child(rPr, 'i'), 'w:val') !== 'false' && attr(child(rPr, 'i'), 'w:val') !== '0') m.italic = true;
-  const u = child(rPr, 'u');
-  if (u && attr(u, 'w:val') && attr(u, 'w:val') !== 'none') m.underline = true;
-  const sz = attr(child(rPr, 'sz'), 'w:val');
-  if (sz) m.fontSize = Math.round((parseInt(sz, 10) / 2) * PT_TO_PX);
-  const color = attr(child(rPr, 'color'), 'w:val');
-  if (color && color !== 'auto') m.color = `#${color.replace(/^#/, '')}`;
-  const font = child(rPr, 'rFonts');
-  if (font) { const f = attr(font, 'w:ascii') || attr(font, 'w:hAnsi'); if (f) m.fontFamily = f; }
+  if (rPr) {
+    if (child(rPr, 'b') && attr(child(rPr, 'b'), 'w:val') !== 'false' && attr(child(rPr, 'b'), 'w:val') !== '0') m.bold = true;
+    if (child(rPr, 'i') && attr(child(rPr, 'i'), 'w:val') !== 'false' && attr(child(rPr, 'i'), 'w:val') !== '0') m.italic = true;
+    const u = child(rPr, 'u');
+    if (u && attr(u, 'w:val') && attr(u, 'w:val') !== 'none') m.underline = true;
+    const sz = attr(child(rPr, 'sz'), 'w:val');
+    if (sz) m.fontSize = Math.round(HALFPT_TO_PX(sz));
+    const color = attr(child(rPr, 'color'), 'w:val');
+    if (color && color !== 'auto') m.color = `#${color.replace(/^#/, '')}`;
+    const font = child(rPr, 'rFonts');
+    if (font) { const f = attr(font, 'w:ascii') || attr(font, 'w:hAnsi'); if (f) m.fontFamily = f; }
+  }
+  // Fall back to the paragraph/style/document default so a run that inherits its
+  // size (very common — Word rarely repeats it inline) still renders at the right
+  // size instead of collapsing to the model's generic default.
+  if (m.fontSize == null && defaults.fontSize) m.fontSize = defaults.fontSize;
+  if (m.fontFamily == null && defaults.fontFamily) m.fontFamily = defaults.fontFamily;
   return m;
 }
 
@@ -223,8 +481,27 @@ function colsFromCellWidths(rowWidths) {
 
 /* --------------------------------- images --------------------------------- */
 
-function readInlineImage(pNode, files, rels) {
-  const blip = pNode.getElementsByTagName('a:blip')[0];
+/** Every `w:drawing` in a paragraph → image blocks (inline or floating). */
+function readDrawings(pNode, files, rels, page) {
+  const out = [];
+  for (const drawing of Array.from(pNode.getElementsByTagName('w:drawing'))) {
+    const block = drawingToBlock(drawing, files, rels, page);
+    if (block) out.push(block);
+  }
+  return out;
+}
+
+/**
+ * One `w:drawing` → an image block, mapping DOCX layout to the model:
+ *   • `wp:inline` .......................... inline block (flows on its own line)
+ *   • `wp:anchor` + wrapSquare/Tight/Through side-wrap float (text reflows beside)
+ *   • `wp:anchor` + wrapNone ............... free float (front, or behind if behindDoc)
+ *   • `wp:anchor` + wrapTopAndBottom ....... inline block (full-width, own line)
+ * Size comes from `wp:extent` (EMU→px); a float's page position comes from
+ * `wp:positionH/V` (offset or align, resolved against the page/margins).
+ */
+function drawingToBlock(drawing, files, rels, page) {
+  const blip = drawing.getElementsByTagName('a:blip')[0];
   if (!blip) return null;
   const embed = blip.getAttribute('r:embed') || blip.getAttribute('embed');
   const target = embed && rels[embed];
@@ -234,10 +511,60 @@ function readInlineImage(pNode, files, rels) {
   if (!bytes) return null;
   const ext = (path.split('.').pop() || 'png').toLowerCase();
   const mime = ext === 'jpg' ? 'jpeg' : ext;
-  const ext_node = pNode.getElementsByTagName('wp:extent')[0];
-  const width = ext_node ? Math.round(parseInt(ext_node.getAttribute('cx') || '0', 10) / 9525) : null;
-  return createImageBlock({ src: `data:image/${mime};base64,${base64(bytes)}`, width: width || undefined });
+
+  const extent = drawing.getElementsByTagName('wp:extent')[0];
+  const width = extent ? Math.round((parseInt(extent.getAttribute('cx') || '0', 10)) / EMU_PER_PX) : undefined;
+  const height = extent ? Math.round((parseInt(extent.getAttribute('cy') || '0', 10)) / EMU_PER_PX) : undefined;
+  const block = createImageBlock({
+    src: `data:image/${mime};base64,${base64(bytes)}`,
+    width: width || undefined,
+    height: height || undefined,
+  });
+
+  const anchor = drawing.getElementsByTagName('wp:anchor')[0];
+  if (!anchor) return block; // wp:inline → plain inline image
+
+  const has = (name) => anchor.getElementsByTagName(name).length > 0;
+  const square = has('wp:wrapSquare') || has('wp:wrapTight') || has('wp:wrapThrough');
+  const none = has('wp:wrapNone');
+  const behind = anchor.getAttribute('behindDoc') === '1';
+
+  const posH = anchor.getElementsByTagName('wp:positionH')[0];
+  const posV = anchor.getElementsByTagName('wp:positionV')[0];
+  const hAlign = posH ? textOf(posH.getElementsByTagName('wp:align')[0]) : '';
+  const hOff = posH ? intOf(posH.getElementsByTagName('wp:posOffset')[0]) : null;   // EMU
+  const vOff = posV ? intOf(posV.getElementsByTagName('wp:posOffset')[0]) : null;
+  const hFrom = (posH && posH.getAttribute('relativeFrom')) || 'column';
+  const vFrom = (posV && posV.getAttribute('relativeFrom')) || 'paragraph';
+
+  const pageW = page.width;
+  const m = page.margin;
+  const wpx = block.width || 0;
+  // Absolute left (px from the page's left edge).
+  let leftPx = null;
+  if (hOff != null) leftPx = hFrom === 'page' ? hOff / EMU_PER_PX : m + hOff / EMU_PER_PX;
+  else if (hAlign) leftPx = hAlign === 'right' ? (pageW - m - wpx) : hAlign === 'center' ? (pageW - wpx) / 2 : m;
+  const centreX = (leftPx != null ? leftPx : m) + wpx / 2;
+  const side = hAlign === 'right' ? 'right' : hAlign === 'left' ? 'left' : (centreX > pageW / 2 ? 'right' : 'left');
+
+  if (square) {
+    // In-flow side float: text wraps down the opposite edge. No left/top — the flow
+    // decides its vertical home (mirrors the editor's wrap-left / wrap-right).
+    block.wrap = side;
+  } else if (none) {
+    // Free float painted over the text (front) or behind it.
+    block.wrap = behind ? 'behind' : 'front';
+    if (behind) block.z = -1;
+    block.left = Math.round(leftPx != null ? leftPx : m);
+    const topPx = vOff != null ? (vFrom === 'page' ? vOff / EMU_PER_PX : m + vOff / EMU_PER_PX) : m;
+    block.top = Math.round(topPx);
+  }
+  // wrapTopAndBottom / anything else → keep it as a plain inline block.
+  return block;
 }
+
+const textOf = (node) => (node ? (node.textContent || '').trim() : '');
+const intOf = (node) => { const t = textOf(node); return t === '' ? null : parseInt(t, 10); };
 
 /* ------------------------------ OOXML helpers ----------------------------- */
 

@@ -71,8 +71,8 @@ export function modelToDocx(model, opts = {}) {
 
   let bodyXml;
   if (mode === 'exact') bodyXml = absoluteBody(content, addImage, opts.cleanBg);
-  else if (mode === 'ai') bodyXml = aiBody(content, opts.aiPages || [], addImage);
-  else if (mode === 'layout') bodyXml = faithfulBody(content, addImage);
+  else if (mode === 'ai') bodyXml = aiBody(content, opts.aiPages || [], addImage, opts.inlineImages);
+  else if (mode === 'layout') bodyXml = faithfulBody(content, addImage, opts.inlineImages);
   else bodyXml = flowBody(content, mode === 'hybrid' ? addImage : null);
 
   const documentXml =
@@ -161,7 +161,7 @@ function inlineImageParagraph(im, addImage) {
  * (which lets you type in paragraphs and table cells, but not in floating boxes).
  * The trade-off is flow-based layout rather than pixel-exact positioning.
  */
-function faithfulBody(content, addImage) {
+function faithfulBody(content, addImage, inlineImages = false) {
   const parts = [];
   const pages = reconstructPages(content);
   let drawId = 1;
@@ -176,7 +176,14 @@ function faithfulBody(content, addImage) {
         if (lastWasTable) flow.push(TABLE_SEP); // keep adjacent tables from merging
         flow.push(tableXml(b, addImage));
         lastWasTable = true;
-      } else if (b.type === 'image') { imgBlocks.push(b); }
+      } else if (b.type === 'image') {
+        // Inline mode (used when the target is the flowing Document editor): emit the
+        // picture INLINE at its reading-order position so it pushes content down.
+        // Floated at absolute PDF coordinates it would overlap the reflowed text,
+        // because the flow editor does not preserve the PDF's y positions.
+        if (inlineImages) { flow.push(inlineImagePara(b, addImage, pg.w)); lastWasTable = false; }
+        else imgBlocks.push(b);
+      }
       else { flow.push(styledPara(b, addImage)); lastWasTable = false; }
     }
     if (lastWasTable) flow.push(TABLE_SEP); // required paragraph after a trailing table
@@ -184,7 +191,7 @@ function faithfulBody(content, addImage) {
     // size — a logo, barcode, photo or signature stays pinned where it belongs,
     // and two images can sit side by side (impossible with inline paragraphs,
     // which stack). Text/tables remain normal editable flow. All page-relative,
-    // so one carrier paragraph per page is enough.
+    // so one carrier paragraph per page is enough. (Skipped in inline mode above.)
     if (imgBlocks.length) {
       const anchors = imgBlocks.map((b) => {
         const rId = addImage(b.src);
@@ -232,6 +239,19 @@ function inlineImageRun(im, addImage) {
     + `<wp:docPr id="${id}" name="crop${id}"/><wp:cNvGraphicFramePr/>`
     + `<a:graphic xmlns:a="${A_NS}">${pictureGraphic(im.w || 20, im.h || 12, rId, id)}</a:graphic>`
     + '</wp:inline></w:drawing></w:r>';
+}
+
+/** A whole page image emitted INLINE as its own centered paragraph, clamped to the
+ *  page's content width so a large figure never overflows the margins. Keeps the
+ *  picture in reading-order flow (no absolute float → no overlap with reflowed text).
+ *  Used for the "open in Document editor" handoff; the downloadable Word keeps floats. */
+function inlineImagePara(b, addImage, pageW) {
+  const maxW = Math.max(48, (pageW || 794) - 96); // leave room for the page margins
+  let w = b.w || 200, h = b.h || 150;
+  if (w > maxW) { h = Math.round(h * (maxW / w)); w = maxW; }
+  return '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="40"/></w:pPr>'
+    + inlineImageRun({ src: b.src, w, h }, addImage)
+    + '</w:p>';
 }
 
 /** Render content lines (see reconstruct.runsToContentLines) as a paragraph body:
@@ -341,7 +361,7 @@ function sumCols(cols, start, span) {
  * same helpers as the `layout` mode. The page's embedded images ride as floating
  * anchored pictures at their own positions.
  */
-function aiBody(content, aiPages, addImage) {
+function aiBody(content, aiPages, addImage, inlineImages = false) {
   const parts = [];
   const pages = content.pages;
   const MPX = 24; // page margin (px) — tight, so the rebuilt flow tracks the PDF
@@ -350,29 +370,42 @@ function aiBody(content, aiPages, addImage) {
   pages.forEach((pg, pi) => {
     const ap = aiPages[pi];
     const innerW = Math.max(120, (pg.w || 800) - MPX * 2);
+    const innerH = Math.max(120, (pg.h || 1100) - MPX * 2);
 
     // Text and tables flow (editable) in reading order.
-    const blocks = ((ap && Array.isArray(ap.blocks)) ? ap.blocks.slice() : [])
-      .sort((a, b) => (a.y || 0) - (b.y || 0) || (a.x || 0) - (b.x || 0));
+    const blocks = ((ap && Array.isArray(ap.blocks)) ? ap.blocks.slice() : []);
 
-    // Images (discrete objects + raster-recovered photo/signature/QR/barcode) are
-    // placed as FLOATING, page-anchored drawings at their EXACT PDF coordinates —
-    // exactly like Exact/Layout mode — so a candidate photo stays pinned beside its
-    // section on the right instead of collapsing into a centred inline stack in the
-    // middle of the page. One carrier paragraph is enough: offsets are page-relative,
-    // so where it sits in the flow affects only z-order, not position.
+    // Split the page's images by role:
+    //  • WIDE figures (a banner/diagram/chart spanning most of the column, with no
+    //    text beside them) flow INLINE, interleaved into the text/table stream at
+    //    their PDF y-position — so they take their own space in reading order and can
+    //    never float over the heading/paragraph/table beneath (the reported bug).
+    //  • NARROW side-images (a form's photo/signature/QR pinned in a margin column,
+    //    with text alongside) stay FLOATING at their exact PDF coordinates, so they
+    //    keep sitting beside their section instead of forcing a full-width line break.
     const imgs = (pg.images || []);
-    if (imgs.length) {
-      const anchors = imgs.map((im) => {
+    const floatImgs = [], stream = blocks.slice();
+    for (const im of imgs) {
+      // `inlineImages` (Document-editor handoff): flow EVERY picture in reading order
+      // so none can float over the reflowed text. Otherwise only WIDE figures inline
+      // and narrow side-images stay pinned beside their section.
+      if (inlineImages || (im.w || 0) >= innerW * 0.5) stream.push({ kind: 'image', y: im.y || 0, x: im.x || 0, im });
+      else floatImgs.push(im);
+    }
+    stream.sort((a, b) => (a.y || 0) - (b.y || 0) || (a.x || 0) - (b.x || 0));
+
+    if (floatImgs.length) {
+      const anchors = floatImgs.map((im) => {
+        const [dw, dh] = fitImage(im, innerW, innerH); // never larger than the page
         const rId = addImage(im.src);
         const id = drawId++;
-        return anchor(im.x || 0, im.y || 0, im.w, im.h, id, pictureGraphic(im.w, im.h, rId, id));
+        return anchor(im.x || 0, im.y || 0, dw, dh, id, pictureGraphic(dw, dh, rId, id));
       }).join('');
       parts.push(`<w:p><w:r>${anchors}</w:r></w:p>`);
     }
 
     let lastWasTable = false;
-    for (const b of blocks) {
+    for (const b of stream) {
       // `geom` blocks come from the geometry recovery (aiLayout.reconstructLeftovers)
       // and are already in reconstruct-native shape, so they go straight to the
       // shared table/paragraph builders; the AI-region blocks are converted first.
@@ -383,9 +416,19 @@ function aiBody(content, aiPages, addImage) {
       } else if (b && b.kind === 'paragraph') {
         parts.push(styledPara(b.geom ? b : aiParaToBlock(b), addImage));
         lastWasTable = false;
+      } else if (b && b.kind === 'image') {
+        // Inline, centred picture — sized to fit the printable width with aspect
+        // ratio preserved (never enlarged), so it reserves its own vertical space and
+        // the following heading/paragraph/table flow below it.
+        const [dw, dh] = fitImage(b.im, innerW, innerH);
+        const rId = addImage(b.im.src);
+        const id = drawId++;
+        parts.push('<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="80" w:after="80"/></w:pPr>'
+          + `<w:r>${inlineDrawing(dw, dh, rId, id)}</w:r></w:p>`);
+        lastWasTable = false;
       }
     }
-    if (!blocks.length && !imgs.length) parts.push('<w:p/>');
+    if (!stream.length && !floatImgs.length) parts.push('<w:p/>');
 
     const secW = TW(pg.w), secH = TW(pg.h);
     const mar = TW(MPX);
@@ -593,7 +636,7 @@ function absoluteBody(content, addImage, cleanBg) {
  * @returns {{x:number, top:number, right:number, h:number, bg:string,
  *   parts:{run:object, space:boolean}[]}[]}
  */
-function segmentRuns(runs, { mask }) {
+export function segmentRuns(runs, { mask }) {
   const usable = (runs || []).filter((r) =>
     String(r && r.text != null ? r.text : '').length && !(mask && hasComplexScript(r.text)));
   const sorted = usable.slice().sort((a, b) => a.y - b.y || a.x - b.x);
@@ -738,6 +781,33 @@ function borderRectGraphic(w, h) {
     + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>'
     + '<a:ln w="6350" cap="flat"><a:solidFill><a:srgbClr val="808080"/></a:solidFill></a:ln>'
     + '</wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData>';
+}
+
+/**
+ * Display size (px) for an image, shrunk to fit within maxW×maxH while preserving
+ * its aspect ratio. Only ever scales DOWN (k ≤ 1) — a small PDF image is never
+ * blown up — so images can't become "arbitrarily huge" and never overflow the page.
+ * @returns {[number, number]} clamped [width, height] in px
+ */
+function fitImage(im, maxW, maxH) {
+  let w = im && im.w > 0 ? im.w : maxW;
+  let h = im && im.h > 0 ? im.h : w; // no height → assume square
+  const k = Math.min(1, maxW / w, maxH / h);
+  return [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
+}
+
+/** An INLINE picture: flows in the text stream, so it reserves its own space and
+ *  can never overlap surrounding paragraphs, headings or tables. noChangeAspect
+ *  locks the aspect ratio when the user later resizes it in Word. */
+function inlineDrawing(w, h, rId, id) {
+  const W = EMU(w), H = EMU(h);
+  return '<w:drawing>'
+    + '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+    + `<wp:extent cx="${W}" cy="${H}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>`
+    + `<wp:docPr id="${id}" name="pic${id}"/>`
+    + `<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="${A_NS}" noChangeAspect="1"/></wp:cNvGraphicFramePr>`
+    + `<a:graphic xmlns:a="${A_NS}">${pictureGraphic(w, h, rId, id)}</a:graphic>`
+    + '</wp:inline></w:drawing>';
 }
 
 /** An absolutely-positioned picture. */

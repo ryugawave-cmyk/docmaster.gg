@@ -577,6 +577,15 @@
   position: absolute; left: 0;
   background: #fff; border-radius: 3px; box-shadow: var(--sh-page);
 }
+/* Margin guides: the printable-area outline, one per page. Hidden unless enabled
+   via Page setup → "Show page margins". Sits above the sheet, below the text. */
+.doc-guides { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; display: none; }
+.doc-pagestack--guides .doc-guides { display: block; }
+.doc-guide {
+  position: absolute;
+  border: 1px dashed rgba(79, 70, 229, .45);
+  border-radius: 1px;
+}
 .doc-page {
   position: relative; z-index: 1;
   background: transparent;
@@ -588,6 +597,43 @@
 /* Pagination spacer: the gap a block is pushed across to start the next page.
    Non-editable and inert — excluded from the model on read. */
 .doc-pagebreak { user-select: none; -webkit-user-select: none; pointer-events: none; }
+
+/* ---- Positioned (exact-layout) documents ----
+   Each imported PDF text line is an absolutely-positioned, independently-editable
+   box placed at the PDF's own x/y (top applied by the layout pass). The container
+   page is inert; only the boxes take the caret. The page raster (on the sheet
+   behind) supplies every non-text graphic pixel-exact. */
+.doc-page.is-positioned { cursor: default; }
+.doc-posbox {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  line-height: 1.15;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  outline: none;
+  cursor: text;
+  /* A faint editable-region hint so users can see where the text boxes are, without
+     obscuring the PDF underneath. Strengthens on hover/focus. */
+  border: 1px solid transparent;
+  border-radius: 2px;
+  transition: border-color .12s, background-color .12s;
+}
+.doc-page.is-positioned:not(.is-readonly) .doc-posbox:hover {
+  border-color: rgba(79, 70, 229, .28);
+  background: rgba(79, 70, 229, .04);
+}
+.doc-posbox:focus,
+.doc-posbox:focus-within {
+  border-color: rgba(79, 70, 229, .7);
+  background: rgba(255, 255, 255, .55);
+}
+/* A positioned box selected AS AN OBJECT (right-click): solid outline + resize
+   handles (reusing .doc-imgsel). Raised so its handles sit above neighbouring boxes.
+   The focus-within white wash is suppressed so it doesn't fight the object outline. */
+.doc-posbox--selected { outline: 2px solid var(--ws-primary, #4f46e5); outline-offset: 1px; z-index: 6; cursor: default; }
+.doc-posbox--selected:focus, .doc-posbox--selected:focus-within { background: none; }
 
 .doc-block { margin: 0 0 10px; line-height: 1.5; font-size: 16px; }
 .doc-page h1.doc-block { font-family: var(--ws-display); font-size: 30px; font-weight: 800; margin: 4px 0 14px; line-height: 1.2; }
@@ -602,6 +648,11 @@
 /* Selected image reads as draggable (drag the body to reposition it). */
 .doc-image.is-selected img,
 .doc-image:hover img { cursor: move; }
+/* Text wrap (Word/Docs "Wrap text"): the figure stays IN the flow but floats to
+   one side, so the surrounding paragraphs' text reflows around it instead of the
+   image sitting on top of the words. */
+.doc-image.is-wrap-left { float: left; margin: 4px 18px 10px 0; }
+.doc-image.is-wrap-right { float: right; margin: 4px 0 10px 18px; }
 /* Freely positioned image: lifted out of the text flow, placed by its left/top. */
 .doc-image.is-floating { position: absolute; margin: 0; z-index: 3; }
 /* While being dragged: grabbing cursor + snappier feel (no drop shadow flicker). */
@@ -2170,6 +2221,11 @@
   border-radius: 7px; text-align: left; font-size: 13.5px; color: var(--ws-text);
 }
 .doc-cmenu__item:hover { background: var(--ws-primary-soft, #eef0ff); }
+.doc-cmenu__item.is-active { background: var(--ws-primary-soft, #eef0ff); font-weight: 600; }
+.doc-cmenu__grouplbl {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ws-text-soft, #6b7280); padding: 4px 8px 2px;
+}
 .doc-cmenu__lbl { flex: 1 1 auto; }
 .doc-cmenu__arrow { color: var(--ws-text-soft, #9ca3af); font-size: 11px; }
 .doc-cmenu__dot {
@@ -2396,7 +2452,10 @@
   background: #fff; border: 1px solid var(--ws-border); border-radius: 12px;
   box-shadow: 0 20px 50px -14px rgba(19, 22, 45, 0.45);
 }
-.cde__head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--ws-border); }
+.cde__head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--ws-border); cursor: move; user-select: none; touch-action: none; }
+.cde.is-dragging { user-select: none; }
+.cde.is-dragging .cde__table { pointer-events: none; }
+.cde__close { cursor: pointer; }
 .cde__title { font-weight: 700; font-size: 14px; color: var(--ws-text); }
 .cde__close { width: 30px; height: 30px; border: 0; background: transparent; cursor: pointer; font-size: 22px; color: var(--ws-text-muted); border-radius: 7px; }
 .cde__close:hover { background: var(--ws-primary-soft); }
@@ -2412,6 +2471,16 @@
 }
 .cde__sname { font-weight: 600; }
 .cde__val { text-align: right; }
+/* A value cell stacks the number over a small "label" field: type your own
+   number/text on that exact slice/bar/point (shows on the chart live). */
+.cde__cellstack { display: flex; flex-direction: column; gap: 3px; }
+.cde__ptlbl {
+  width: 100%; height: 22px; padding: 0 7px; box-sizing: border-box;
+  border: 1px dashed var(--ws-border); border-radius: 5px; font-size: 11px;
+  color: var(--ws-text-soft); outline: none; text-align: right;
+}
+.cde__ptlbl::placeholder { color: var(--ws-text-muted); font-style: italic; }
+.cde__ptlbl:focus { border-style: solid; border-color: var(--ws-primary); }
 .cde__color { width: 100%; height: 30px; padding: 2px; box-sizing: border-box; border: 1px solid var(--ws-border); border-radius: 6px; background: #fff; cursor: pointer; }
 .cde__sname:focus, .cde__cat:focus, .cde__val:focus { border-color: var(--ws-primary); }
 .cde__x { width: 22px; height: 22px; border: 0; background: transparent; color: var(--ws-text-muted); cursor: pointer; font-size: 16px; border-radius: 5px; }
@@ -2421,15 +2490,227 @@
 .cde__mini:hover:not(:disabled) { background: var(--ws-primary-soft); }
 .cde__mini:disabled { opacity: .4; cursor: default; }
 .cde__mini--del:hover { background: #fdecec; color: #c0392b; }
-.cde__foot { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ws-border); }
+/* Y-Axis controls (numeric-axis charts): Auto/Custom range, format, title. */
+.cde__axis { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ws-border); background: var(--ws-surface, #f8fafc); }
+.cde__axtop { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.cde__axcap { font-size: 12px; font-weight: 700; color: var(--ws-text); text-transform: uppercase; letter-spacing: .03em; }
+.cde__axrow { display: flex; flex-wrap: wrap; gap: 10px; }
+.cde__axrow[hidden] { display: none; }
+.cde__axfield { display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ws-text-muted); }
+.cde__axfield--wide { flex: 1 1 180px; }
+.cde__axnum { width: 84px; height: 28px; padding: 0 8px; box-sizing: border-box; border: 1px solid var(--ws-border); border-radius: 6px; font-size: 13px; outline: none; }
+.cde__axtitle { width: 100%; height: 28px; padding: 0 8px; box-sizing: border-box; border: 1px solid var(--ws-border); border-radius: 6px; font-size: 13px; outline: none; }
+.cde__axnum:focus, .cde__axtitle:focus { border-color: var(--ws-primary); }
+.cde__axnum.is-invalid { border-color: #dc2626; background: #fef2f2; }
+.cde__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; row-gap: 10px; padding: 10px 12px; border-top: 1px solid var(--ws-border); }
 .cde__add { border: 1px solid var(--ws-border); background: #fff; cursor: pointer; padding: 7px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ws-text-soft); }
 .cde__add:hover { border-color: var(--ws-primary); background: var(--ws-primary-soft); }
+.cde__labels { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 600; color: var(--ws-text-muted); }
+.cde__labels-cap { color: var(--ws-text-muted); }
+.cde__toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--ws-text-soft); }
+.cde__toggle input { width: 15px; height: 15px; accent-color: var(--ws-primary); cursor: pointer; }
 .cde__unit { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ws-text-muted); }
 .cde__unitin { width: 58px; height: 30px; padding: 0 8px; box-sizing: border-box; border: 1px solid var(--ws-border); border-radius: 6px; font-size: 13px; outline: none; text-align: center; }
 .cde__unitin:focus { border-color: var(--ws-primary); }
 .cde__spacer { flex: 1 1 auto; }
-.cde__done { border: 0; background: var(--ws-primary); color: #fff; cursor: pointer; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+.cde__done { margin-left: auto; border: 0; background: var(--ws-primary); color: #fff; cursor: pointer; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; }
 .cde__done:hover { filter: brightness(1.05); }
+
+/* ===================== Floating Calculator (Edit ▸ Calculator) ============ */
+/* Premium dark "glassmorphism" theme: near-black glass panel, blue/purple neon
+   glow + glowing border, dark glassy keys, white numbers, blue functions, purple
+   operators and a glowing purple "=" — purely visual, layout/behaviour unchanged. */
+.calc {
+  --cx-blue: #74a6ff;              /* function / memory text */
+  --cx-purple: #b98cff;            /* operators */
+  --cx-purple-deep: #7c3aed;       /* = fill */
+  --cx-line: rgba(150, 170, 255, 0.10);
+  position: fixed; top: 80px; left: 24px; right: auto; z-index: 90;
+  width: 340px; min-width: 300px; min-height: 360px;
+  display: flex; flex-direction: column; overflow: hidden; resize: both;
+  color: #eaeefb;
+  background:
+    radial-gradient(120% 80% at 15% -10%, rgba(70, 96, 200, 0.18), transparent 60%),
+    radial-gradient(120% 90% at 100% 110%, rgba(140, 80, 220, 0.20), transparent 60%),
+    linear-gradient(160deg, rgba(20, 23, 36, 0.92), rgba(8, 9, 16, 0.95));
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(130, 150, 235, 0.28);
+  border-radius: 18px;
+  box-shadow:
+    0 30px 80px -24px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(90, 110, 255, 0.06),
+    0 0 42px -8px rgba(80, 120, 255, 0.40),
+    0 0 80px -12px rgba(150, 90, 255, 0.34);
+  font-size: 13px; outline: none;
+}
+.calc--sci { width: 500px; }
+.calc__head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--cx-line); cursor: move; user-select: none; touch-action: none; }
+.calc.is-dragging { user-select: none; }
+.calc__title { font-weight: 700; font-size: 14px; letter-spacing: .01em; color: #f6f8ff; white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.calc__modes { display: inline-flex; flex-shrink: 0; margin-left: 4px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 10px; padding: 3px; }
+.calc__mode { border: 0; background: transparent; cursor: pointer; padding: 5px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; color: rgba(230, 236, 255, 0.55); transition: color .15s, background .15s, box-shadow .15s; }
+.calc__mode:hover { color: rgba(230, 236, 255, 0.85); }
+.calc__mode.is-on { color: #cbb2ff; background: rgba(124, 58, 237, 0.16); box-shadow: inset 0 0 0 1px rgba(150, 100, 255, 0.6), 0 0 16px -3px rgba(150, 90, 255, 0.7); }
+.calc__headtools { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.calc__icon { width: 30px; height: 30px; border: 0; background: transparent; cursor: pointer; border-radius: 8px; color: rgba(230, 236, 255, 0.6); font-size: 15px; line-height: 1; transition: color .15s, background .15s; }
+.calc__icon:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.calc__icon.is-on { background: rgba(124, 58, 237, 0.16); color: #cbb2ff; }
+.calc__close { font-size: 20px; }
+
+.calc__display {
+  position: relative; margin: 12px; padding: 16px 18px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.4));
+  box-shadow: inset 0 1px 24px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+.calc__badges { display: flex; gap: 6px; min-height: 16px; }
+.calc__badge { font-size: 10px; font-weight: 700; letter-spacing: .06em; color: rgba(230, 236, 255, 0.55); border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 5px; padding: 0 5px; line-height: 15px; background: rgba(255, 255, 255, 0.03); }
+.calc__badge--ang { color: var(--cx-blue); border-color: rgba(116, 166, 255, 0.4); text-shadow: 0 0 12px rgba(116, 166, 255, 0.5); }
+.calc__expr { font-size: 30px; font-weight: 300; color: #fff; text-align: right; overflow-x: auto; white-space: nowrap; padding: 8px 0 4px; scrollbar-width: none; }
+.calc__expr::-webkit-scrollbar { display: none; }
+.calc__displayfoot { display: flex; align-items: center; justify-content: space-between; min-height: 20px; }
+.calc__preview { font-size: 14px; color: rgba(230, 236, 255, 0.45); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calc__copy { border: 0; background: transparent; cursor: pointer; color: rgba(230, 236, 255, 0.5); font-size: 15px; border-radius: 6px; width: 26px; height: 24px; transition: color .15s, background .15s; }
+.calc__copy:hover { background: rgba(255, 255, 255, 0.06); color: var(--cx-blue); }
+.calc__copy.is-copied { color: #48e0a0; }
+
+.calc__keys { display: grid; gap: 8px; padding: 12px; }
+.calc__keys--base { grid-template-columns: repeat(4, 1fr); }
+/* Scientific: one wide landscape grid (3 function cols + 4 numeric cols). */
+.calc__keys--sci7 { grid-template-columns: repeat(7, 1fr); }
+/* The scientific pad and history are toggled via the `hidden` property; these
+   author `display` rules would otherwise beat the UA `[hidden]` rule, so restore
+   hiding explicitly (Normal mode must NOT show sin/cos/… — only base keys). */
+.calc__keys[hidden], .calc__history[hidden] { display: none; }
+.calc__key {
+  height: 44px; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px;
+  color: #f2f5ff; font-size: 15px; font-weight: 500; padding: 0; cursor: pointer;
+  background: linear-gradient(180deg, rgba(40, 45, 64, 0.55), rgba(18, 20, 30, 0.6));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px -3px rgba(0, 0, 0, 0.6);
+  transition: background .14s, border-color .14s, box-shadow .14s, transform .05s, color .14s;
+}
+.calc__key:hover { background: linear-gradient(180deg, rgba(56, 63, 90, 0.7), rgba(26, 29, 44, 0.72)); border-color: rgba(140, 160, 255, 0.28); }
+.calc__key:active { transform: translateY(1px); }
+.calc__key--num { color: #ffffff; font-weight: 500; }
+/* Functions, memory and utility keys read in neon blue (like the reference). */
+.calc__key--fn { font-size: 12px; font-weight: 600; color: var(--cx-blue); }
+.calc__key--mem { font-size: 12px; font-weight: 700; color: var(--cx-blue); }
+.calc__key--util { color: var(--cx-blue); font-weight: 600; }
+/* Operators: dark glass with a purple glowing outline + purple glyph. */
+.calc__key--op {
+  color: #d4b4ff; font-size: 17px; font-weight: 600;
+  background: linear-gradient(180deg, rgba(64, 42, 104, 0.5), rgba(34, 24, 58, 0.55));
+  border-color: rgba(160, 110, 255, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(160, 110, 255, 0.12), 0 0 18px -6px rgba(150, 90, 255, 0.6);
+}
+.calc__key--op:hover { border-color: rgba(180, 130, 255, 0.7); box-shadow: inset 0 0 0 1px rgba(180, 130, 255, 0.2), 0 0 22px -4px rgba(160, 100, 255, 0.75); }
+/* DEG/RAD toggle: a function key with a purple neon accent. */
+.calc__key--fn.calc__key--mode { color: #cbb2ff; border-color: rgba(160, 110, 255, 0.4); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 16px -5px rgba(150, 90, 255, 0.55); }
+/* "=" — filled glowing purple. */
+.calc__key--eq {
+  color: #fff; font-weight: 700; font-size: 17px; border-color: rgba(190, 150, 255, 0.55);
+  background: linear-gradient(135deg, var(--cx-purple-deep), #9d4bff 55%, #b16cff);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 0 26px -4px rgba(150, 80, 255, 0.75);
+}
+.calc__key--eq:hover { filter: brightness(1.08); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 34px -3px rgba(160, 90, 255, 0.9); }
+.calc__key--wide { grid-column: span 3; }
+.calc__key--wide4 { grid-column: span 4; }
+
+.calc__history { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; border-top: 1px solid var(--cx-line); }
+.calc__histhead { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: rgba(230, 236, 255, 0.5); }
+.calc__histclear { border: 0; background: transparent; cursor: pointer; color: rgba(230, 236, 255, 0.5); font-size: 11px; font-weight: 600; }
+.calc__histclear:hover { color: var(--cx-blue); }
+.calc__histlist { overflow-y: auto; padding: 0 10px 10px; display: flex; flex-direction: column; gap: 4px; }
+.calc__histrow { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; border: 0; background: transparent; cursor: pointer; padding: 6px 8px; border-radius: 8px; text-align: right; }
+.calc__histrow:hover { background: rgba(255, 255, 255, 0.05); }
+.calc__histexpr { font-size: 12px; color: rgba(230, 236, 255, 0.5); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calc__histres { font-size: 14px; font-weight: 700; color: #f2f5ff; }
+.calc__histempty { font-size: 12px; color: rgba(230, 236, 255, 0.4); padding: 8px 10px; text-align: center; }
+
+/* ==========================================================================
+ *  Math & Science Symbol Library — floating picker (Edit → Symbol).
+ *  Shares the Calculator's dark glass look; own layout (rail + scroll grid).
+ * ========================================================================== */
+.sym {
+  --sx-line: rgba(150, 170, 255, 0.10);
+  position: fixed; top: 80px; left: 24px; z-index: 90;
+  width: 520px; height: 460px; min-width: 380px; min-height: 320px;
+  display: flex; flex-direction: column; overflow: hidden; resize: both;
+  color: #eaeefb;
+  background:
+    radial-gradient(120% 80% at 15% -10%, rgba(70, 96, 200, 0.18), transparent 60%),
+    radial-gradient(120% 90% at 100% 110%, rgba(140, 80, 220, 0.20), transparent 60%),
+    linear-gradient(160deg, rgba(20, 23, 36, 0.92), rgba(8, 9, 16, 0.95));
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(130, 150, 235, 0.28);
+  border-radius: 18px;
+  box-shadow:
+    0 30px 80px -24px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(90, 110, 255, 0.06),
+    0 0 42px -8px rgba(80, 120, 255, 0.40),
+    0 0 80px -12px rgba(150, 90, 255, 0.34);
+  font-size: 13px; outline: none;
+}
+.sym__head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 16px; cursor: move; user-select: none; touch-action: none; }
+.sym.is-dragging { user-select: none; }
+.sym__title { font-weight: 700; font-size: 14px; letter-spacing: .01em; color: #f6f8ff; white-space: nowrap; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sym__headtools { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.sym__icon { width: 30px; height: 30px; border: 0; background: transparent; cursor: pointer; border-radius: 8px; color: rgba(230, 236, 255, 0.6); font-size: 15px; line-height: 1; transition: color .15s, background .15s; }
+.sym__icon:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.sym__close { font-size: 20px; }
+.sym__searchrow { padding: 0 14px 12px; }
+.sym__search {
+  width: 100%; box-sizing: border-box; height: 34px; padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 10px; outline: none;
+  background: rgba(0, 0, 0, 0.28); color: #eef2ff; font-size: 13px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.sym__search::placeholder { color: rgba(230, 236, 255, 0.4); }
+.sym__search:focus { border-color: rgba(150, 100, 255, 0.7); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18); }
+.sym__body { display: flex; min-height: 0; flex: 1 1 auto; border-top: 1px solid var(--sx-line); }
+.sym__rail {
+  flex: 0 0 156px; width: 156px; overflow-y: auto; padding: 8px;
+  display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--sx-line);
+}
+.sym__railsep { height: 1px; margin: 6px 6px; background: var(--sx-line); }
+.sym__cat {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+  padding: 7px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  color: rgba(230, 236, 255, 0.62); transition: color .15s, background .15s;
+}
+.sym__cat:hover { background: rgba(255, 255, 255, 0.05); color: rgba(230, 236, 255, 0.9); }
+.sym__cat.is-on { background: rgba(124, 58, 237, 0.16); color: #cbb2ff; box-shadow: inset 0 0 0 1px rgba(150, 100, 255, 0.45); }
+.sym__catname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym__catcount { flex-shrink: 0; font-size: 10px; font-weight: 700; color: rgba(230, 236, 255, 0.4); background: rgba(255, 255, 255, 0.06); border-radius: 20px; padding: 1px 7px; }
+.sym__cat.is-on .sym__catcount { color: #cbb2ff; background: rgba(150, 100, 255, 0.18); }
+.sym__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.sym__gridtitle { padding: 10px 14px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: rgba(230, 236, 255, 0.5); }
+.sym__grid {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 14px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 6px; align-content: start;
+}
+.sym__tile {
+  position: relative; aspect-ratio: 1 / 1; min-height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 10px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.03); color: #eef2ff;
+  transition: background .12s, border-color .12s, transform .06s;
+}
+.sym__tile:hover { background: rgba(124, 58, 237, 0.18); border-color: rgba(150, 100, 255, 0.6); }
+.sym__tile:active { transform: scale(0.94); }
+.sym__glyph { font-size: 20px; line-height: 1; }
+.sym__star {
+  position: absolute; top: 1px; right: 2px; border: 0; background: transparent; cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 1px; color: rgba(230, 236, 255, 0.28);
+  opacity: 0; transition: opacity .12s, color .12s;
+}
+.sym__tile:hover .sym__star { opacity: 1; }
+.sym__star:hover { color: #ffd764; }
+.sym__star.is-on { opacity: 1; color: #ffcf4d; }
+.sym__empty { grid-column: 1 / -1; padding: 26px 16px; text-align: center; font-size: 12px; color: rgba(230, 236, 255, 0.45); }
 
 /* Inline per-point label editor (double-click a bar/slice/point on a chart). */
 .doc-chartlabel-input {

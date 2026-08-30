@@ -18,7 +18,7 @@
 import { el } from '../../../workspace/utils/dom.js';
 import { renderIcon } from '../../../workspace/icons.js';
 import { blockModelToImages, compressWord, estimateWordSize } from '../../services/convert/blockMedia.js';
-import { blockModelToPdf, blockModelToXlsx } from '../../services/convert/blockExport.js';
+import { blockModelToPdf, blockModelToXlsx, blockModelToPptx } from '../../services/convert/blockExport.js';
 
 // Each tool: an icon, title, description and either a `run(ctx)` (convert +
 // download immediately) or `view` (open a sub-view). `ctx` = { model, name,
@@ -54,14 +54,13 @@ const TOOLS = [
     id: 'compress', icon: 'compress', title: 'Compress Word', desc: 'Reduce Word document file size',
     view: 'compress',
   },
-  // Future feature — a locked "Coming Soon" placeholder. Flip `available` to true
-  // and give it a `run(ctx)` (like the tools above) to ship it; no UI rebuild
-  // needed. Nothing here runs, downloads, or is clickable while locked.
   {
     id: 'ppt', icon: 'template', title: 'Document → PowerPoint',
-    desc: 'Convert your document into a PowerPoint presentation',
-    available: false, comingSoon: true, wide: true,
-    tooltip: 'PowerPoint export is coming soon.',
+    desc: 'Convert your document into an editable presentation', wide: true,
+    async run({ model, base }) {
+      const blob = await blockModelToPptx(model);
+      return { blob, filename: `${base}.pptx` };
+    },
   },
 ];
 

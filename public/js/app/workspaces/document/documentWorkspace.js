@@ -24,6 +24,8 @@ import { openStampPicker } from './docStampPicker.js';
 import { stampSvgMarkup } from '../../editor/stampLibrary.js';
 import { openChartPicker } from './chartPicker.js';
 import { defaultChart } from '../../editor/chartRender.js';
+import { openCalculator } from '../../editor/calculator.js';
+import { openSymbolLibrary } from '../../editor/symbolLibrary.js';
 import { FONT_OPTIONS } from '../../properties/index.js';
 
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64];
@@ -263,7 +265,6 @@ export function createDocumentWorkspace({ bus, store, services }) {
     { label: 'Save project', icon: 'save', shortcut: '.dmdoc', onClick: saveProject },
     { sep: true },
     { label: 'Page setup', icon: 'sliders', onClick: openPageSetup },
-    { label: 'Print', icon: 'print', shortcut: 'Ctrl+P', onClick: () => window.print() },
     { label: 'Close document', onClick: backHome },
   ];
   const editMenu = () => [
@@ -271,6 +272,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
     { label: 'Redo', shortcut: 'Ctrl+Y', disabled: !editor?.canRedo?.(), onClick: () => editor?.redo() },
     { sep: true },
     { label: 'Select all', shortcut: 'Ctrl+A', onClick: selectAll },
+    { sep: true },
+    { label: 'Symbol…', onClick: openSymbols },
+    { label: 'Calculator', onClick: () => openCalculator() },
   ];
   const viewMenu = () => [
     { label: toolbarHidden ? 'Show formatting toolbar' : 'Hide formatting toolbar', onClick: toggleToolbar },
@@ -433,8 +437,8 @@ export function createDocumentWorkspace({ bus, store, services }) {
   const PX_PER_CM = 96 / 2.54;
   const CM_PER_PX = 2.54 / 96;
   const PAPER_SIZES = [
-    { id: 'letter', label: 'Letter (21.6 cm x 27.9 cm)', w: 816, h: 1056 },
     { id: 'a4', label: 'A4 (21.0 cm x 29.7 cm)', w: 794, h: 1123 },
+    { id: 'letter', label: 'Letter (21.6 cm x 27.9 cm)', w: 816, h: 1056 },
     { id: 'legal', label: 'Legal (21.6 cm x 35.6 cm)', w: 816, h: 1344 },
     { id: 'a3', label: 'A3 (29.7 cm x 42.0 cm)', w: 1123, h: 1587 },
     { id: 'a5', label: 'A5 (14.8 cm x 21.0 cm)', w: 559, h: 794 },
@@ -472,6 +476,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
     const mInput = (key) => el('input', { class: 'doc-dialog__num', type: 'number', min: '0', step: '0.1', value: toCm(cur.margins[key]) });
     const mTop = mInput('top'), mBottom = mInput('bottom'), mLeft = mInput('left'), mRight = mInput('right');
     const field = (label, input) => el('label', { class: 'doc-dialog__field' }, [el('span', { class: 'doc-dialog__flabel' }, label), input]);
+    // "Show page margins": a view-only guide outlining the printable area. Off by
+    // default; the checkbox reflects the current live state.
+    const showMarginsInput = el('input', { type: 'checkbox', checked: !!editor.getShowMargins() });
 
     const apply = () => {
       const size = PAPER_SIZES.find((s) => s.id === paperSelect.value) || PAPER_SIZES[0];
@@ -483,6 +490,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
         margins: { top: cmToPx(mTop.value), right: cmToPx(mRight.value), bottom: cmToPx(mBottom.value), left: cmToPx(mLeft.value) },
         background: colorInput.value,
       });
+      editor.setShowMargins(showMarginsInput.checked);
       renderRuler();
       closePageSetup();
       editor.focus();
@@ -502,6 +510,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
       el('div', { class: 'doc-dialog__section' }, [
         el('div', { class: 'doc-dialog__label' }, 'Margins (centimetres)'),
         el('div', { class: 'doc-dialog__margins' }, [field('Top', mTop), field('Bottom', mBottom), field('Left', mLeft), field('Right', mRight)]),
+      ]),
+      el('div', { class: 'doc-dialog__section' }, [
+        el('label', { class: 'doc-dialog__check' }, [showMarginsInput, el('span', {}, 'Show page margins')]),
       ]),
       el('div', { class: 'doc-dialog__foot' }, [
         el('button', { class: 'doc-dialog__btn', type: 'button', onClick: closePageSetup }, 'Cancel'),
@@ -745,7 +756,11 @@ export function createDocumentWorkspace({ bus, store, services }) {
 
   function refreshOutline() {
     if (!ui.outlineList || !editor || !hasDoc) return;
-    const heads = Array.from(editor.element.querySelectorAll('h1.doc-block, h2.doc-block, h3.doc-block'));
+    // Flow docs tag headings as h1/h2/h3; positioned (exact-layout) docs tag them
+    // as .doc-posbox[data-heading]. Collect both, in document (DOM) order.
+    const heads = Array.from(editor.element.querySelectorAll(
+      'h1.doc-block, h2.doc-block, h3.doc-block, .doc-posbox[data-heading]'
+    ));
     if (!heads.length) {
       ui.outlineList.replaceChildren(
         el('p', { class: 'doc-outline__empty' }, 'Headings that you add to the document will appear here.')
@@ -753,7 +768,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
       return;
     }
     ui.outlineList.replaceChildren(...heads.map((h) => {
-      const level = h.tagName.toLowerCase();
+      const level = h.dataset && h.dataset.heading ? `h${h.dataset.heading}` : h.tagName.toLowerCase();
       // Plain heading text only, with internal whitespace/newlines collapsed —
       // the outline shows clean names, never document markup or formatting.
       const text = (h.textContent || '').replace(/\s+/g, ' ').trim() || 'Heading';
@@ -946,7 +961,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
           // document listener that closes the popover; only outside clicks close.
           onClick: (e) => e.stopPropagation(),
         });
-        render('main');
+        render();
         btn.parentElement.appendChild(menu);
         setTimeout(() => document.addEventListener('click', close), 0);
       },
@@ -955,32 +970,21 @@ export function createDocumentWorkspace({ bus, store, services }) {
       el('span', { class: 'doc-btn__txt' }, 'Export'),
     ]);
 
-    // Two views share one popover: the main choice, and the Quick Export format
-    // list (reached from it, with a Back header). Rebuilding in place avoids
-    // fragile flyout positioning while keeping everything keyboard-reachable.
-    function render(view) {
+    // A single popover with two choices: Quick Export (one-click Word download) and
+    // Advanced Export (the full format/tools panel).
+    function render() {
       if (!menu) return;
-      menu.replaceChildren(...(view === 'quick' ? quickView() : mainView()));
+      menu.replaceChildren(...mainView());
       menu.querySelector('button')?.focus();
     }
 
     function mainView() {
       return [
         el('div', { class: 'doc-xmenu__title' }, 'Export'),
-        richRow('export', 'Quick Export', 'Export your document quickly', () => render('quick')),
+        // Quick Export = one click → download Word (.docx). No second step; other
+        // formats live under Advanced Export.
+        richRow('word', 'Quick Export', 'Download Word (.docx)', () => { close(); doExport('docx'); }),
         richRow('sparkle', 'Advanced Export', 'More formats and document tools', () => { close(); openAdvancedExport(); }, 'doc-xmenu__row--glow'),
-      ];
-    }
-
-    function quickView() {
-      return [
-        el('button', {
-          class: 'doc-xmenu__back', type: 'button',
-          onClick: () => render('main'),
-        }, [el('span', { class: 'doc-xmenu__back-ico', html: renderIcon('chevron') }), 'Quick Export']),
-        exportItem('pdf', 'export', 'Download PDF'),
-        exportItem('docx', 'word', 'Download Word (.docx)'),
-        exportItem('html', 'document', 'Download HTML'),
       ];
     }
 
@@ -997,15 +1001,6 @@ export function createDocumentWorkspace({ bus, store, services }) {
       ]);
     }
 
-    function exportItem(format, icon, label) {
-      return el('button', {
-        class: 'app-menu__item', type: 'button', role: 'menuitem',
-        onClick: () => { close(); doExport(format); },
-      }, [
-        el('span', { class: 'app-menu__icon', html: renderIcon(icon) }),
-        el('span', { class: 'app-menu__label' }, label),
-      ]);
-    }
     return btn;
   }
 
@@ -1071,6 +1066,13 @@ export function createDocumentWorkspace({ bus, store, services }) {
   function openProLibrary() {
     if (!editor || !hasDoc) { bus.emit('toast', 'Create or open a document first.'); return; }
     openChartPicker({ onPick: (typeId) => editor.insertChart(defaultChart(typeId)) });
+  }
+  function openSymbols() {
+    if (!editor || !hasDoc) { bus.emit('toast', 'Create or open a document first.'); return; }
+    openSymbolLibrary({
+      insert: (ch) => editor.insertText(ch),
+      restore: () => editor.restoreCaret(),
+    });
   }
 
   /* ------------------------ selection reflection ------------------------ */
@@ -1196,6 +1198,12 @@ export function createDocumentWorkspace({ bus, store, services }) {
     },
 
     async open(file) { await openFile(file); },
+
+    // Open an already-built Document model in place (no file, no import). Used by the
+    // PDF editor's "Transfer to Doc" to hand over a positioned exact-layout document
+    // it built from the PDF's own coordinates. Reuses the normal load path, so the
+    // editor enters word-processor mode with the document ready to edit.
+    openModel(model, name) { loadDoc(model, name || (model && model.title) || 'Document'); },
 
     // Called by the export manager. Returns a Blob (downloaded) or nothing.
     async export(options = {}) {

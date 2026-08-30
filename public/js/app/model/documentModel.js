@@ -50,8 +50,8 @@ export const DEFAULT_BLOCK_STYLE = Object.freeze({
   spaceAfter: 10,
 });
 
-/** US-Letter at 96dpi, matching how PDF pages are sized elsewhere. */
-export const DEFAULT_PAGE = Object.freeze({ width: 816, height: 1056, margin: 72 });
+/** A4 at 96dpi (21.0 × 29.7 cm) — the default new-document page size. */
+export const DEFAULT_PAGE = Object.freeze({ width: 794, height: 1123, margin: 72 });
 
 export function createRun(text = '', marks = {}) {
   return { text, marks: { ...DEFAULT_MARKS, ...marks } };

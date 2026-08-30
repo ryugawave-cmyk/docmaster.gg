@@ -37,6 +37,27 @@
 .bpx-import { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 16px; color: #fff; background: var(--bpx-accent); border: 0; border-radius: 9px; font-size: 13.5px; font-weight: 650; box-shadow: 0 2px 6px rgba(109, 40, 217, 0.3); transition: background var(--t-fast), transform var(--t-fast); }
 .bpx-import span { width: 16px; height: 16px; display: inline-flex; }
 .bpx-import:hover { background: #5b21b6; transform: translateY(-1px); }
+/* Transfer-to-Doc — headline handoff button; a distinct emerald→violet gradient
+   with a soft glow so it reads as a primary feature next to Import PDF. */
+.bpx-transfer { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 16px; color: #fff; background: linear-gradient(135deg, #10b981, #6d28d9); border: 0; border-radius: 9px; font-size: 13.5px; font-weight: 650; box-shadow: 0 2px 10px rgba(16, 185, 129, 0.32); transition: filter var(--t-fast), transform var(--t-fast), box-shadow var(--t-fast); }
+.bpx-transfer__ico { width: 16px; height: 16px; display: inline-flex; }
+.bpx-transfer:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(109, 40, 217, 0.4); }
+.bpx-transfer:active { transform: translateY(0); }
+
+/* ---- Transfer processing overlay (PDF → Document editor) ---- */
+.bpx-xfer { position: absolute; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(238, 240, 244, 0.82); backdrop-filter: blur(3px); }
+.bpx-xfer__card { display: flex; flex-direction: column; align-items: center; gap: 14px; width: min(420px, 84vw); padding: 32px 30px; text-align: center; background: #fff; border: 1px solid var(--bpx-line); border-radius: 16px; box-shadow: 0 20px 60px rgba(19, 22, 45, 0.22); }
+.bpx-xfer__spin { width: 42px; height: 42px; border: 3px solid #d1d5db; border-top-color: var(--bpx-accent); border-radius: 50%; animation: bpx-spin 0.8s linear infinite; }
+.bpx-xfer__title { font-size: 16px; font-weight: 750; color: #111827; }
+.bpx-xfer__step { font-size: 13.5px; font-weight: 600; color: var(--bpx-accent); min-height: 18px; }
+.bpx-xfer__bar { width: 100%; height: 6px; background: #eceef3; border-radius: 999px; overflow: hidden; }
+.bpx-xfer__bar-fill { display: block; width: 40%; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #10b981, #6d28d9); animation: bpx-xfer-slide 1.15s ease-in-out infinite; }
+.bpx-xfer__hint { font-size: 11.5px; line-height: 1.4; color: var(--bpx-muted); }
+@keyframes bpx-xfer-slide { 0% { margin-left: -42%; } 100% { margin-left: 102%; } }
+.bpx-xfer.is-dark { background: rgba(15, 23, 42, 0.82); }
+.bpx-xfer.is-dark .bpx-xfer__card { background: #111827; border-color: #1f2937; }
+.bpx-xfer.is-dark .bpx-xfer__title { color: #f8fafc; }
+.bpx-xfer.is-dark .bpx-xfer__bar { background: #1f2937; }
 .bpx-iconbtn { display: inline-flex; width: 34px; height: 34px; padding: 8px; color: var(--bpx-muted); background: none; border: 0; border-radius: 8px; }
 .bpx-iconbtn:hover { background: #f3f4f6; color: #111827; }
 .bpx-avatar { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; font-size: 12px; font-weight: 700; color: #fff; background: linear-gradient(135deg, #64748b, #475569); border: 0; border-radius: 50%; }
@@ -174,6 +195,10 @@
    drawer over the canvas — only one is ever open, so no wasted column. */
 .bpx { --bpx-features-w: 240px; }
 .bpx-body { grid-row: 3; position: relative; display: grid; grid-template-columns: 220px 1fr; min-height: 0; overflow: hidden; }
+/* Pages panel off by default (blank doc / before a PDF is opened): drop its
+   grid column so the canvas reclaims the width, and hide the panel itself. */
+.bpx-body.is-nopages { grid-template-columns: 1fr; }
+.bpx-body.is-nopages .bpx-left { display: none; }
 
 /* ---- Right PDF-tools panel (toggle drawer, mutually exclusive with Properties) ---- */
 .bpx-features {
@@ -514,7 +539,9 @@
 }
 .bpx-exp__opt-desc { font: 500 11.5px/1.3 var(--ws-font, 'Inter', sans-serif); color: var(--bpx-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bpx-exp__opt-chev { display: none; width: 16px; height: 16px; color: var(--bpx-muted); }
-.bpx-exp__opt-lock { display: inline-flex; margin-left: auto; width: 15px; height: 15px; flex: 0 0 auto; color: var(--bpx-muted); }
+.bpx-exp__opt-locktag { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; flex: 0 0 auto; }
+.bpx-exp__opt-soon { padding: 3px 8px; font: 700 9px/1 var(--ws-font, 'Inter', sans-serif); letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; color: var(--bpx-muted); background: color-mix(in srgb, var(--bpx-muted) 14%, transparent); border-radius: 999px; }
+.bpx-exp__opt-lock { display: inline-flex; width: 15px; height: 15px; flex: 0 0 auto; color: var(--bpx-muted); }
 .bpx-exp__opt.is-locked { cursor: not-allowed; }
 .bpx-exp__opt.is-locked .bpx-exp__opt-lbl, .bpx-exp__opt.is-locked .bpx-exp__opt-desc, .bpx-exp__opt.is-locked .bpx-exp__opt-ico { opacity: .5; }
 .bpx-exp__opt.is-locked:hover { background: none; }
@@ -542,7 +569,7 @@
 /* PDF → Word: premium conversion-mode cards + collapsed advanced options. */
 .bpx-exp__wordmode { display: flex; flex-direction: column; }
 .bpx-exp__cards { display: flex; flex-direction: column; gap: 12px; }
-.bpx-exp__card { position: relative; display: flex; align-items: flex-start; gap: 15px; width: 100%; padding: 18px 18px 16px; text-align: left; background: #fff; border: 1.5px solid var(--bpx-line); border-radius: 16px; cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast); }
+.bpx-exp__card { position: relative; display: flex; align-items: center; gap: 15px; width: 100%; padding: 16px 18px; text-align: left; background: #fff; border: 1.5px solid var(--bpx-line); border-radius: 16px; cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast); }
 .bpx-exp__card:hover { border-color: color-mix(in srgb, var(--bpx-accent) 45%, transparent); box-shadow: 0 10px 26px -14px rgba(109, 40, 217, 0.45); transform: translateY(-1px); }
 .bpx-exp__card.is-on { border-color: var(--bpx-accent); background: var(--bpx-accent-soft); box-shadow: inset 0 0 0 1px var(--bpx-accent), 0 10px 26px -14px rgba(109, 40, 217, 0.4); }
 .bpx-exp__card-ico { display: inline-flex; width: 46px; height: 46px; flex: 0 0 auto; padding: 11px; color: var(--bpx-accent); background: color-mix(in srgb, var(--bpx-accent) 10%, #fff); border-radius: 12px; transition: background var(--t-fast), color var(--t-fast); }
@@ -734,6 +761,7 @@
 .bpx-exp--pro .bpx-exp__opt-desc { color: var(--pro-muted); }
 .bpx-exp--pro .bpx-exp__opt-chev { display: inline-flex; margin-left: auto; color: var(--pro-faint); }
 .bpx-exp--pro .bpx-exp__opt-lock { color: var(--pro-faint); }
+.bpx-exp--pro .bpx-exp__opt-soon { color: var(--pro-faint); background: color-mix(in srgb, var(--pro-faint) 16%, transparent); }
 .bpx-exp--pro .bpx-exp__opt.is-locked .bpx-exp__opt-lbl,
 .bpx-exp--pro .bpx-exp__opt.is-locked .bpx-exp__opt-desc,
 .bpx-exp--pro .bpx-exp__opt.is-locked .bpx-exp__opt-ico { opacity: 0.45; }

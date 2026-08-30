@@ -196,6 +196,23 @@ function wireCommands({ root, els, bus, store, manager, services }) {
     if (file) openInWorkspace(file, classifyTarget(file));
   });
 
+  // An in-memory file handed off by a workspace (e.g. the PDF editor's "Edit in
+  // Document editor" converts the PDF to a .docx and asks us to open it in the
+  // Document workspace). Same effect as a drop/open, but the target workspace is
+  // explicit and the file never touches the disk or network.
+  bus.on('workspace:open-file', ({ file, workspaceId } = {}) => {
+    if (file) openInWorkspace(file, workspaceId || classifyTarget(file));
+  });
+
+  // An already-built document MODEL handed off by a workspace (the PDF editor's
+  // "Transfer to Doc" builds a positioned exact-layout Document and passes it
+  // straight to the Document workspace — no file, no import round-trip).
+  bus.on('workspace:open-doc-model', ({ model, name } = {}) => {
+    if (!model) return;
+    const ws = manager.activate('document') || manager.current();
+    ws?.openModel?.(model, name);
+  });
+
   // Fixed toolbar chrome buttons (data-action) via one delegated listener.
   root.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');

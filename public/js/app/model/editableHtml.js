@@ -26,10 +26,16 @@ export function renderBlocks(doc) {
 }
 
 function blockToEl(block) {
-  if (block.type === 'image') return imageToEl(block);
-  if (block.type === 'table') return tableToEl(block);
-  if (block.type === 'list') return listToEl(block);
-  return paragraphToEl(block);
+  if (block.type === 'posbox') return posboxToEl(block); // positioned (exact-layout) text box
+  const el = block.type === 'image' ? imageToEl(block)
+    : block.type === 'table' ? tableToEl(block)
+      : block.type === 'list' ? listToEl(block)
+        : paragraphToEl(block);
+  // A forced page break BEFORE this block (e.g. an imported PDF/Word page
+  // boundary): the pagination engine pushes it to the top of the next page so
+  // the document keeps the source's page count instead of reflowing freely.
+  if (block.breakBefore) el.classList.add('doc-break-before');
+  return el;
 }
 
 function paragraphToEl(block) {
@@ -48,6 +54,56 @@ function paragraphToEl(block) {
   return el;
 }
 
+/**
+ * A POSITIONED (exact-layout) text box: absolutely placed at the PDF's own
+ * coordinates and independently editable, so imported PDF content keeps its exact
+ * position/size/formatting instead of reflowing. `left/width/min-height` come from
+ * the page-relative frame; the vertical page offset (`top`) is applied by the
+ * editor's positioned layout pass, which knows the page geometry. See
+ * services/convert/positionedImport.js and documentEditor.layoutPositioned().
+ */
+function posboxToEl(block) {
+  const box = document.createElement('div');
+  box.className = 'doc-posbox';
+  box.dataset.blockId = block.id;
+  const f = block.frame || {};
+  box.dataset.page = String(block.page || 0);
+  box.dataset.x = String(Math.round(f.x || 0));
+  box.dataset.y = String(Math.round(f.y || 0));
+  box.dataset.w = String(Math.round(f.w || 0));
+  box.dataset.h = String(Math.round(f.h || 0));
+  // Heading level (inferred from the PDF's font size) so the left outline can list
+  // it and the box reads as a heading. Purely a tag — position/size are unchanged.
+  if (block.heading) { box.dataset.heading = String(block.heading); box.classList.add(`doc-posbox--h${block.heading}`); }
+  box.setAttribute('contenteditable', 'true');
+  box.style.position = 'absolute';
+  box.style.left = `${Math.round(f.x || 0)}px`;
+  box.style.width = `${Math.round(f.w || 0)}px`;
+  box.style.minHeight = `${Math.round(f.h || 0)}px`;
+  // Mask fill sampled from the page background, so the box hides any baked glyphs
+  // underneath (edits then visibly replace the text). Empty → transparent. `opacity`
+  // (0..1, box BACKGROUND only) lets the user fade the box to reveal the page image
+  // while the text stays fully solid — applied as an rgba background, NOT CSS opacity
+  // (which would fade the text too).
+  if (block.fill) {
+    const hex = String(block.fill).replace(/^#/, '');
+    box.dataset.fill = block.fill;
+    const a = block.opacity == null ? 1 : Math.max(0, Math.min(1, block.opacity));
+    box.style.background = a >= 1 ? `#${hex}` : rgbaFromHex(hex, a);
+    if (block.opacity != null) box.dataset.opacity = String(a);
+  }
+  if (block.style && block.style.align) box.style.textAlign = block.style.align;
+  const runs = block.runs && block.runs.length ? block.runs : [createRun('')];
+  let hasText = false;
+  for (const run of runs) {
+    if (!run.text && !run.field) continue;
+    box.appendChild(runToNode(run));
+    hasText = true;
+  }
+  if (!hasText) box.appendChild(document.createElement('br'));
+  return box;
+}
+
 function runToNode(run) {
   const m = { ...DEFAULT_MARKS, ...run.marks };
   const span = document.createElement('span');
@@ -60,7 +116,10 @@ function runToNode(run) {
     span.contentEditable = 'false';
     span.textContent = '1';
   } else {
-    span.textContent = run.text;
+    // Strip tofu-box placeholder/control chars on the way to the DOM too, so an
+    // imported doc (whose model is built without going through readRuns) never
+    // shows the box in the editor either.
+    span.textContent = String(run.text).replace(JUNK_CHARS, '');
   }
   span.style.fontFamily = m.fontFamily;
   span.style.fontSize = `${m.fontSize}px`;
@@ -110,6 +169,13 @@ function imageToEl(block) {
     fig.style.top = `${block.top}px`;
   }
   if (block.z != null) fig.style.zIndex = String(block.z);
+  // Text-wrap mode (Word/Docs). Persists for every figure — image, shape, chart.
+  if (block.wrap && block.wrap !== 'inline') {
+    fig.dataset.wrap = block.wrap;
+    if (block.wrap === 'left') fig.classList.add('is-wrap-left');
+    else if (block.wrap === 'right') fig.classList.add('is-wrap-right');
+    else if (block.wrap === 'behind') fig.classList.add('is-behind');
+  }
   // Inserted vector shape: keep its parameters as data-* so it stays recolourable
   // (the editor regenerates the baked SVG from these). block.src is the baked SVG
   // so it still renders/exports without regeneration.
@@ -128,8 +194,6 @@ function imageToEl(block) {
   if (block.chart) {
     fig.classList.add('doc-chart');
     fig.dataset.chart = typeof block.chart === 'string' ? block.chart : JSON.stringify(block.chart);
-    if (block.wrap) fig.dataset.wrap = block.wrap;
-    if (block.wrap === 'behind') fig.classList.add('is-behind');
   }
   return fig;
 }
@@ -207,11 +271,16 @@ export function readBlocks(rootEl) {
   const blocks = [];
   for (const el of Array.from(rootEl.children)) {
     if (el.classList.contains('doc-pagebreak')) continue; // pagination spacer — not content
+    if (el.classList.contains('doc-posbox')) { blocks.push(readPosbox(el)); continue; } // positioned box
     if (!BLOCK_TAGS.has(el.tagName)) continue;
-    if (el.tagName === 'FIGURE') blocks.push(readImage(el));
-    else if (el.tagName === 'TABLE') blocks.push(readTable(el));
-    else if (el.tagName === 'UL' || el.tagName === 'OL') blocks.push(readList(el));
-    else blocks.push(readParagraph(el));
+    let blk;
+    if (el.tagName === 'FIGURE') blk = readImage(el);
+    else if (el.tagName === 'TABLE') blk = readTable(el);
+    else if (el.tagName === 'UL' || el.tagName === 'OL') blk = readList(el);
+    else blk = readParagraph(el);
+    // Preserve a forced page break so it survives edits, save/reload and export.
+    if (el.classList.contains('doc-break-before')) blk.breakBefore = true;
+    blocks.push(blk);
   }
   return blocks.length ? blocks : [{ type: 'paragraph', tag: 'p', style: {}, runs: [createRun('')] }];
 }
@@ -227,6 +296,40 @@ function readParagraph(el) {
   };
 }
 
+/** Read a positioned (exact-layout) text box back into the model. Keeps its
+ *  page-relative frame; height tracks the live box so edits that add lines persist.
+ *  The absolute `top` is derived from page geometry at render time, never stored. */
+function readPosbox(el) {
+  const num = (v) => Math.round(parseFloat(v) || 0);
+  const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { height: 0 };
+  const block = {
+    id: el.dataset.blockId,
+    type: 'posbox',
+    page: parseInt(el.dataset.page || '0', 10) || 0,
+    frame: {
+      x: num(el.style.left) || num(el.dataset.x),
+      y: num(el.dataset.y),
+      w: num(el.style.width) || num(el.dataset.w),
+      h: Math.round(rect.height) || num(el.dataset.h),
+    },
+    style: { align: el.style.textAlign || 'left' },
+    runs: readRuns(el),
+  };
+  if (el.dataset.heading) block.heading = parseInt(el.dataset.heading, 10) || undefined;
+  if (el.dataset.fill) block.fill = el.dataset.fill;
+  if (el.dataset.opacity != null && el.dataset.opacity !== '') block.opacity = Math.max(0, Math.min(1, parseFloat(el.dataset.opacity)));
+  return block;
+}
+
+/** `#rrggbb` (or `rrggbb`) + alpha 0..1 → a CSS rgba() string. */
+function rgbaFromHex(hex, a) {
+  const h = String(hex).replace(/^#/, '');
+  const r = parseInt(h.slice(0, 2), 16) || 0;
+  const g = parseInt(h.slice(2, 4), 16) || 0;
+  const b = parseInt(h.slice(4, 6), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 function readBlockStyle(el) {
   const cs = getComputedStyle(el);
   return {
@@ -236,6 +339,14 @@ function readBlockStyle(el) {
     spaceAfter: parseFloat(el.style.marginBottom) || 10,
   };
 }
+
+// Non-printable / placeholder characters that carry no meaning in body text but
+// render as a hollow "tofu" box (a leftover U+FFFC object-replacement char from an
+// import, a stray BOM, C0/C1 controls, the replacement char, …). Stripped on read
+// so they never enter the model — and so never appear in the editor or any export.
+// Preserves tab/newline/CR and the zero-width joiners (U+200C/U+200D) that complex
+// scripts depend on.
+const JUNK_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\uFEFF\uFFF9-\uFFFD]/g;
 
 /** Walk text nodes in order, deriving each run's marks from computed style. */
 function readRuns(blockEl) {
@@ -255,7 +366,11 @@ function readRuns(blockEl) {
       runs.push({ field: fieldEl.dataset.field, marks: marksFromEl(fieldEl) });
       continue;
     }
-    runs.push({ text, marks: marksFromEl(node.parentElement) });
+    // Drop tofu-box placeholder/control chars (e.g. a stray U+FFFC from an import)
+    // so they never reach the model, the editor render, or any export.
+    const clean = text.replace(JUNK_CHARS, '');
+    if (!clean) continue;
+    runs.push({ text: clean, marks: marksFromEl(node.parentElement) });
   }
   return normalizeRuns(runs);
 }
@@ -287,6 +402,9 @@ function readImage(fig) {
     top: floating ? Math.round(parseFloat(fig.style.top) || 0) : undefined,
   };
   if (fig.style.zIndex) block.z = parseInt(fig.style.zIndex, 10);
+  // Text-wrap mode (any figure). 'inline' is the default, so it's left implicit.
+  const wrap = fig.dataset.wrap;
+  if (wrap && wrap !== 'inline') block.wrap = wrap;
   // Recolourable vector shape parameters (see imageToEl).
   if (fig.dataset.shapeId) {
     block.shape = {
@@ -300,7 +418,6 @@ function readImage(fig) {
   // Professional Library chart spec (keeps the chart editable after save/reload).
   if (fig.dataset.chart) {
     try { block.chart = JSON.parse(fig.dataset.chart); } catch { /* keep as image */ }
-    if (fig.dataset.wrap) block.wrap = fig.dataset.wrap;
   }
   return block;
 }

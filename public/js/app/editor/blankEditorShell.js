@@ -20,6 +20,7 @@ import { createBlankPdfEditor, shapeSvgMarkup } from './blankPdfEditor.js';
 import { renderPdfToPages } from './pdfImport.js';
 import { exportEditorToPdf, renderPageCanvas, modelHasVisibleContent } from './pdfExport.js';
 import { createExportPanel } from './exportPanel.js';
+import { pdfModelToPositionedDoc } from '../services/convert/positionedImport.js';
 import { packProject, unpackProject } from '../core/document/project.js';
 import { STAMP_CATEGORIES, stampSvgMarkup, makeStampDef } from './stampLibrary.js';
 
@@ -86,6 +87,11 @@ export function createBlankEditorShell({ container, bus }) {
       el('button', { class: 'bpx-tab-add', type: 'button', 'aria-label': 'New tab', html: renderIcon('plus'), onClick: () => bus.emit('toast', 'Multiple documents — coming soon.') }),
     ]),
     el('div', { class: 'bpx-top__right' }, [
+      // "Transfer" — the headline handoff: convert this PDF to an editable document
+      // and open it in the Document editor. Given a distinct glowing style so it
+      // reads as a primary feature, not a hidden menu item.
+      el('button', { class: 'bpx-transfer', type: 'button', title: 'Transfer this PDF into the Document editor as an editable document', onClick: () => transferToDoc() },
+        [el('span', { class: 'bpx-transfer__ico', html: renderIcon('document') }), 'Transfer to Doc']),
       el('button', { class: 'bpx-import', type: 'button', title: 'Import a PDF to edit', onClick: () => bus.emit('nav:command', { command: 'open', arg: 'pdf' }) },
         [el('span', { html: renderIcon('upload') }), 'Import PDF']),
       iconBtn('help', 'Help', () => bus.emit('toast', 'Help center — coming soon.')),
@@ -279,6 +285,74 @@ export function createBlankEditorShell({ container, bus }) {
     document.body.appendChild(exportMenu);
     btn.setAttribute('aria-expanded', 'true');
     setTimeout(() => document.addEventListener('click', closeExportMenu), 0);
+  }
+
+  /* ---------------------- Transfer → Document editor -------------------- */
+  // Hand the open PDF to the Document workspace as an EXACT-LAYOUT (positioned)
+  // document: each page keeps its native size, the PDF page raster becomes the
+  // page background (so borders/shading/lines/images stay pixel-exact), and every
+  // text line becomes an absolutely-positioned, independently-editable box at its
+  // real PDF coordinates with the real font/size/weight/colour/alignment. Nothing
+  // reflows, resizes or re-centres. Built entirely client-side from the PDF's own
+  // extracted coordinates (positionedImport.js) and handed over as a model — no
+  // download, no docx round-trip. See documentEditor.layoutPositioned().
+  //
+  // A focused, full-editor processing overlay shows progress before the Document
+  // editor opens automatically. Reuses the editor spinner styling.
+  let transferOverlay = null, transferStepEl = null;
+  function openTransferOverlay() {
+    transferStepEl = el('div', { class: 'bpx-xfer__step' }, 'Reading the PDF…');
+    transferOverlay = el('div', { class: `bpx-xfer${rootEl.classList.contains('is-dark') ? ' is-dark' : ''}`, role: 'status', 'aria-live': 'polite' }, [
+      el('div', { class: 'bpx-xfer__card' }, [
+        el('div', { class: 'bpx-xfer__spin' }),
+        el('div', { class: 'bpx-xfer__title' }, 'Transferring to Document editor'),
+        transferStepEl,
+        el('div', { class: 'bpx-xfer__bar' }, [el('span', { class: 'bpx-xfer__bar-fill' })]),
+        el('div', { class: 'bpx-xfer__hint' }, 'Rebuilding your PDF as an editable document — text, tables and images kept in place.'),
+      ]),
+    ]);
+    rootEl.appendChild(transferOverlay);
+  }
+  function closeTransferOverlay() { transferOverlay?.remove(); transferOverlay = null; transferStepEl = null; }
+
+  let transferring = false;
+  async function transferToDoc() {
+    if (transferring) return;
+    const model = engine.getExportModel();
+    if (!modelHasContent(model)) {
+      bus.emit('toast', 'Nothing to transfer yet — open or edit a PDF first.');
+      return;
+    }
+    transferring = true;
+    openTransferOverlay();
+    const say = (msg) => { if (transferStepEl) transferStepEl.textContent = msg; };
+    try {
+      say('Reading the PDF page geometry…');
+      await new Promise((r) => requestAnimationFrame(r)); // let the overlay paint first
+      say('Reproducing the exact layout (positions, fonts, tables, images)…');
+      // Build a positioned exact-layout Document directly from the PDF's own
+      // coordinates — masked page raster + editable text boxes at their real x/y.
+      // `ocr:true` also recovers text baked into banners/diagrams as editable boxes
+      // (first run downloads the OCR model; unavailable → transfer still completes).
+      let ocrNotInstalled = false;
+      const doc = await pdfModelToPositionedDoc(model, docName, {
+        ocr: true,
+        onOcrProgress: (done, total) => say(`Reading image text… page ${done + 1} of ${total}`),
+        onOcrUnavailable: () => { ocrNotInstalled = true; },
+      });
+      say('Opening in the Document editor…');
+      // Hand the model straight to the Document workspace (no file, no import).
+      bus.emit('workspace:open-doc-model', { model: doc, name: docName });
+      if (ocrNotInstalled) {
+        bus.emit('toast', 'Text inside images stays as a picture — install on-device OCR (/vendor/tesseract) to make it editable too.');
+      }
+    } catch (err) {
+      console.error('[transfer-to-doc]', err);
+      bus.emit('toast', 'Sorry — this PDF could not be transferred to the Document editor.');
+    } finally {
+      transferring = false;
+      closeTransferOverlay();
+    }
   }
 
   /* ------------------ right sidebar (Properties / PDF Tools) ------------- */
@@ -1008,7 +1082,12 @@ export function createBlankEditorShell({ container, bus }) {
   });
 
   /* ------------------------------- root --------------------------------- */
-  const body = el('div', { class: 'bpx-body' }, [leftPanel, canvasSlot, featuresPanel, rightPanel]);
+  // The Pages panel starts hidden: a brand-new blank document has nothing to
+  // navigate, so it only earns its column once a PDF is opened (loadPdf). A new
+  // document hides it again. `is-nopages` also collapses the grid column so the
+  // canvas reclaims the freed width instead of leaving a 220px gap.
+  const body = el('div', { class: 'bpx-body is-nopages' }, [leftPanel, canvasSlot, featuresPanel, rightPanel]);
+  const setPagesVisible = (on) => body.classList.toggle('is-nopages', !on);
   const rootEl = el('div', { class: 'bpx is-dark' }, [header, toolbar, body, status]);
   container.appendChild(rootEl);
   setTools(false); // PDF Tools panel starts closed; the Tools button opens it
@@ -1085,6 +1164,7 @@ export function createBlankEditorShell({ container, bus }) {
       const doc = await renderPdfToPages(file, (d, t) => setLoading(true, `Opening PDF… ${d}/${t}`));
       engine.loadDocument(doc);
       setDocName(doc.name);
+      setPagesVisible(true); // a real PDF is loaded — reveal the Pages panel
       // Tell the user up front when a PDF is scanned (no text layer) — its text
       // is pixels, so it can't be edited as text.
       if (doc.scanned) bus.emit('toast', 'This PDF looks scanned — its text is an image, so it can’t be edited as text.');
@@ -1111,7 +1191,7 @@ export function createBlankEditorShell({ container, bus }) {
     focus: () => engine.focus(),
     loadPdf,
     loadImage,
-    newDocument: () => { engine.newDocument(); setDocName('Untitled.pdf'); },
+    newDocument: () => { engine.newDocument(); setDocName('Untitled.pdf'); setPagesVisible(false); },
     setDocName,
     stats: () => engine.stats(),
     exportPdf: () => {
@@ -1144,6 +1224,7 @@ export function createBlankEditorShell({ container, bus }) {
           const { model } = await unpackProject(buf);
           engine.loadFromModel(model);
           setDocName(`${files[0].name.replace(/\.dmz$/i, '')}.pdf`);
+          setPagesVisible(true); // a saved project can be multi-page — show Pages
           bus.emit('toast', 'Project opened.');
         } catch {
           bus.emit('toast', 'Could not open that project file.');

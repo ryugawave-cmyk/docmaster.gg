@@ -39,18 +39,31 @@ import { normHex, hasComplexScript } from './model.js';
  * any failure returns the page's original background unchanged.
  *
  * @param {{PW:number,PH:number,pages:{bg?:string|null,w?:number,h?:number,objects:any[]}[]}} model
+ * @param {{protect?:Array<Array<{x:number,y:number,w:number,h:number}>>}} [opts]
+ *   `protect[pageIndex]` lists page-coord rectangles whose text must NOT be erased —
+ *   labels that are PART OF an illustration/diagram (they stay baked as picture).
  * @returns {Promise<(string|null)[]>} one cleaned background data URL per page (or the original)
  */
-export async function maskExtractedText(model) {
+export async function maskExtractedText(model, opts = {}) {
   const out = [];
-  for (const pg of (model.pages || [])) {
-    try { out.push(pg.bg ? await maskPage(pg, model) : (pg.bg || null)); }
+  const protect = opts.protect || [];
+  const pagesArr = model.pages || [];
+  for (let i = 0; i < pagesArr.length; i += 1) {
+    const pg = pagesArr[i];
+    try { out.push(pg.bg ? await maskPage(pg, model, protect[i] || null) : (pg.bg || null)); }
     catch { out.push(pg.bg || null); }
   }
   return out;
 }
 
-async function maskPage(pg, model) {
+/** True when an object's rectangle centre lies inside any protected region. */
+function inProtected(o, protect) {
+  if (!protect || !protect.length) return false;
+  const cx = (o.x || 0) + (o.w || 0) / 2, cy = (o.y || 0) + (o.h || 0) / 2;
+  return protect.some((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h);
+}
+
+async function maskPage(pg, model, protect) {
   const pageW = pg.w || model.PW;
   const img = await loadImage(pg.bg);
   const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
@@ -65,6 +78,9 @@ async function maskPage(pg, model) {
   for (const o of (pg.objects || [])) {
     if (o.type !== 'text' && o.type !== 'comment') continue;
     if (!o.imported) continue;                         // user-added text isn't baked in
+    // A label that is PART OF an illustration/diagram must stay baked in the picture,
+    // so never erase it (the caller keeps it as image, not as an overlay text box).
+    if (inProtected(o, protect)) continue;
     // Complex-script runs (Devanagari & other Indic, Arabic, …) are left BAKED in
     // the Exact-layout DOCX (docx.js skips their scrambled editable overlay), so we
     // must NOT erase them here — doing so would blank out the only correct copy.

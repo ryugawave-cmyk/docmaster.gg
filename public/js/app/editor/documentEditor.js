@@ -18,7 +18,7 @@ import { renderBlocks, readBlocks, marksFromEl } from '../model/editableHtml.js'
 import { cloneDocument, createHeaderFooter } from '../model/documentModel.js';
 import * as TG from '../model/tableGrid.js';
 import { shapeSvg, shapeHasFill } from './shapeLibrary.js';
-import { renderChartSvg, normalizeChart, TYPE_META, CHART_CATALOG, chartTypeLabel, PALETTES, PALETTE_IDS, PER_POINT_FAMILIES } from './chartRender.js';
+import { renderChartSvg, normalizeChart, sampleChart, TYPE_META, CHART_CATALOG, chartTypeLabel, PALETTES, PALETTE_IDS, PER_POINT_FAMILIES } from './chartRender.js';
 import { openChartDataEditor } from './chartDataEditor.js';
 
 export function createDocumentEditor({ container, onChange, onSelection, onPaginate, onRequestHfSettings }) {
@@ -29,6 +29,9 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   // spacers so content that overflows a page flows onto the next sheet.
   const stack = el('div', { class: 'doc-pagestack' });
   const sheets = el('div', { class: 'doc-sheets', 'aria-hidden': 'true' });
+  // Optional margin guides (a dashed rectangle at each page's content box). Off by
+  // default; toggled from Page setup → "Show page margins".
+  const guides = el('div', { class: 'doc-guides', 'aria-hidden': 'true' });
   const vruler = el('div', { class: 'doc-vruler', 'aria-hidden': 'true' }); // vertical ruler, left of the page
   const page = el('div', { class: 'doc-page' });
   page.contentEditable = 'true';
@@ -43,6 +46,7 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   const hfLayer = el('div', { class: 'doc-hf-layer', 'aria-hidden': 'true' });
   const hfMeasure = el('div', { class: 'doc-hf-measure', 'aria-hidden': 'true' });
   stack.appendChild(sheets);
+  stack.appendChild(guides);
   stack.appendChild(vruler);
   stack.appendChild(page);
   stack.appendChild(hfLayer);
@@ -128,6 +132,8 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   let selTimer = 0;
   let endEditing = null; // keyboard editing-session closer (suspends workspace keys)
   let imgSel = null; // currently selected image <figure> (shows resize handles)
+  let lastCaretBlock = null; // last top-level block the caret sat in (for inserts)
+  let savedRange = null; // last caret Range inside editRoot (for insert-at-cursor)
 
   // The element that currently owns text editing/formatting: the body `page`, or
   // (while editing a running head/foot) the active header/footer box. Block-level
@@ -145,6 +151,9 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   function load(doc) {
     base = cloneDocument(doc);
     imgSel = null; // any prior selection belongs to the old document
+    boxSel = null; closeBoxMenu(); // drop any positioned-box selection from a prior doc
+    lastCaretBlock = null;
+    savedRange = null;
     hfEditing = null;
     editRoot = page;
     // Normalise header/footer (older/imported models may lack them) and keep live
@@ -153,6 +162,13 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     base.footer = normalizeHf(base.footer);
     hf = { header: base.header, footer: base.footer };
     buildHfMeasure();
+    // Positioned (exact-layout) documents: the container is inert and each box is
+    // editable on its own, so set that up before the boxes are placed. Reset the
+    // sheet-rebuild guard so a NEWLY transferred PDF always repaints its OWN page
+    // rasters (two different PDFs can share page count/size but not backgrounds).
+    positionedSig = null;
+    page.classList.toggle('is-positioned', base.layout === 'positioned');
+    if (base.layout === 'positioned') page.contentEditable = 'false';
     // Insert the real content FIRST, then apply geometry + paginate over it.
     // (Paginating before the blocks exist would measure an empty page and leave
     // the flow un-broken, so large documents spilled past the sheets.)
@@ -225,6 +241,9 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   }
   function paginate() {
     if (!base) return;
+    // Positioned (exact-layout) documents don't flow: each element keeps its PDF
+    // coordinates on fixed sheets. Lay them out directly and skip the flow engine.
+    if (base.layout === 'positioned') { layoutPositioned(); return; }
     const p = base.page;
     const PAGE_H = p.height;
     const PAGE_W = p.width;
@@ -249,6 +268,18 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       !c.classList.contains('doc-pagebreak') && !c.classList.contains('is-floating'));
     for (let i = 0; i < blocks.length; i += 1) {
       const b = blocks[i];
+      // Forced page break before this block (imported PDF/Word page boundary):
+      // unless it already starts the current page, push it to the next page top
+      // by advancing the page and bridging the gap with a spacer. Done before the
+      // page maths below so the block is measured against its NEW page.
+      if (b.classList.contains('doc-break-before')) {
+        const here = pageIndex * stride + m.top + headerReserve(pageIndex);
+        if (b.offsetTop > here + 1) {
+          pageIndex += 1;
+          const nextTop = pageIndex * stride + m.top + headerReserve(pageIndex);
+          b.before(makeBlockSpacer(Math.max(0, nextTop - b.offsetTop)));
+        }
+      }
       // The usable band shrinks by the running head/foot reserved on THIS page
       // (which can differ per page under Different first / odd & even), so body
       // content can never overlap a header or footer.
@@ -301,6 +332,7 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     const count = Math.max(pageIndex + 1, lastByContent + 1);
     const total = count * PAGE_H + (count - 1) * PAGE_GAP;
     renderSheets(count, PAGE_W, PAGE_H, p.background || '#fff');
+    renderGuides(count, PAGE_W, PAGE_H, m);
     renderVRuler(count, total, m);
     page.style.minHeight = `${total}px`;
     stack.style.height = `${total}px`;
@@ -308,6 +340,42 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     // sync with the actual laid-out pages instead of a stale "1 / 1".
     pageCount = count;
     renderHfBoxes(count); // draw/refresh the running head/foot on every page
+    reportPagination(true);
+  }
+
+  /**
+   * Exact-layout pass for positioned documents (see positionedImport.js). No flow:
+   * the sheet count is the source page count, each sheet shows the PDF page raster
+   * as its background (all non-text graphics pixel-exact), and every `.doc-posbox`
+   * is placed at `page * stride + y` so it lands on its own sheet at the PDF's own
+   * coordinates. Nothing is measured, reflowed, resized or vertically centred — the
+   * one scale factor between PDF, model and screen is the viewport zoom alone.
+   */
+  let positionedSig = null; // guards the (expensive) raster sheet rebuild
+  function layoutPositioned() {
+    const p = base.page;
+    const PAGE_H = p.height, PAGE_W = p.width;
+    const stride = PAGE_H + PAGE_GAP;
+    const bgs = Array.isArray(base.pages) ? base.pages.map((pg) => pg && pg.bg) : [];
+    const count = Math.max(1, bgs.length || 1);
+    for (const box of page.querySelectorAll(':scope > .doc-posbox')) {
+      const pg = parseInt(box.dataset.page || '0', 10) || 0;
+      const y = parseFloat(box.dataset.y || '0') || 0;
+      box.style.top = `${pg * stride + y}px`;
+    }
+    const total = count * PAGE_H + (count - 1) * PAGE_GAP;
+    // Positions are fixed, so only rebuild the page-raster sheets (and vruler) when
+    // the geometry actually changes — never on every keystroke, which would reload
+    // the backgrounds and flicker the page while typing.
+    const sig = `${count}x${PAGE_W}x${PAGE_H}`;
+    if (sig !== positionedSig) {
+      renderSheets(count, PAGE_W, PAGE_H, p.background || '#fff', bgs);
+      renderVRuler(count, total, p.margins || { top: 0, right: 0, bottom: 0, left: 0 });
+      positionedSig = sig;
+    }
+    page.style.minHeight = `${total}px`;
+    stack.style.height = `${total}px`;
+    pageCount = count;
     reportPagination(true);
   }
 
@@ -497,7 +565,7 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     }
     vruler.replaceChildren(frag);
   }
-  function renderSheets(count, w, h, bg) {
+  function renderSheets(count, w, h, bg, backgrounds) {
     const frag = document.createDocumentFragment();
     for (let i = 0; i < count; i += 1) {
       const sheet = document.createElement('div');
@@ -506,11 +574,45 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       sheet.style.width = `${w}px`;
       sheet.style.height = `${h}px`;
       sheet.style.background = bg;
+      // Positioned (exact-layout) pages paint the PDF page raster as the sheet
+      // background so every non-text graphic (borders, shading, lines, images)
+      // stays pixel-exact under the editable text boxes. Stretched to the sheet =
+      // the page's own px size, so it's a 1:1 reproduction (no crop, no distortion).
+      const src = backgrounds && backgrounds[i];
+      if (src) {
+        sheet.style.backgroundImage = `url("${src}")`;
+        sheet.style.backgroundSize = '100% 100%';
+        sheet.style.backgroundRepeat = 'no-repeat';
+      }
       frag.appendChild(sheet);
     }
     sheets.style.width = `${w}px`;
     sheets.replaceChildren(frag);
   }
+
+  // View-only preference (not part of the model): draw the printable-area outline.
+  let showMargins = false;
+  /** Per-page dashed rectangle sitting exactly on the content box (page minus its
+   *  margins), so the user can see where text/images should stay. Inert overlay. */
+  function renderGuides(count, w, h, m) {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < count; i += 1) {
+      const box = document.createElement('div');
+      box.className = 'doc-guide';
+      box.style.top = `${i * (h + PAGE_GAP) + m.top}px`;
+      box.style.left = `${m.left}px`;
+      box.style.width = `${Math.max(0, w - m.left - m.right)}px`;
+      box.style.height = `${Math.max(0, h - m.top - m.bottom)}px`;
+      frag.appendChild(box);
+    }
+    guides.style.width = `${w}px`;
+    guides.replaceChildren(frag);
+  }
+  function setShowMargins(on) {
+    showMargins = !!on;
+    stack.classList.toggle('doc-pagestack--guides', showMargins);
+  }
+  const getShowMargins = () => showMargins;
 
   /** Current page setup (for pre-filling the Page setup dialog). */
   function getPageSetup() {
@@ -923,6 +1025,110 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     emitSelection();
   }
 
+  /** Re-focus the body and drop the caret back where it last was. Used when the
+   *  floating Symbol panel closes so the user keeps typing exactly where they were. */
+  function restoreCaret() {
+    // In positioned mode the page container is inert; the caret lives inside a
+    // `.doc-posbox`. Focus that box (not the page) so the caret is actually placed
+    // and typing/insert-at-cursor lands in it.
+    const host = caretHost();
+    host.focus();
+    if (!savedRange || !editRoot.contains(savedRange.startContainer)) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(savedRange.cloneRange());
+  }
+
+  /**
+   * Positioned docs only: place the caret in the nearest editable text box for a
+   * click that didn't land on one. The page container is inert (contentEditable
+   * false), so clicking the baked page graphics or the gap between line-boxes would
+   * otherwise drop no caret and the doc feels un-editable. We find the box closest to
+   * the point (0 distance = the click is inside it), focus it, and set the caret at
+   * the exact point when possible, else at the nearest end. Returns true if a box
+   * took the caret. `clientX/Y` are viewport coords (already post-zoom).
+   */
+  function focusNearestPosbox(clientX, clientY) {
+    const boxes = page.querySelectorAll(':scope > .doc-posbox');
+    if (!boxes.length) return false;
+    let best = null, bestD = Infinity;
+    for (const b of boxes) {
+      const r = b.getBoundingClientRect();
+      const dx = clientX < r.left ? r.left - clientX : clientX > r.right ? clientX - r.right : 0;
+      const dy = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = b; if (d === 0) break; }
+    }
+    // Only route clicks that are reasonably NEAR text (a gap between lines, the margin
+    // beside a line). A click far from every box is on the baked page graphic (e.g. a
+    // diagram) — leave it alone rather than teleporting the caret to a distant line,
+    // which feels broken. ~90 CSS px ≈ a few lines; scaled by the current zoom.
+    const reach = 90 * (zoom || 1);
+    if (!best || bestD > reach * reach) return false;
+    best.focus();
+    const sel = window.getSelection();
+    if (!sel) return true;
+    // Prefer the exact caret position under the cursor; fall back to the box end when
+    // the point is outside the chosen box (a click in the margin/graphic beside it).
+    let range = document.caretRangeFromPoint ? document.caretRangeFromPoint(clientX, clientY) : null;
+    if (!range || !best.contains(range.startContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(best);
+      range.collapse(false);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+    savedRange = range.cloneRange();
+    return true;
+  }
+
+  /** The element that should take focus for caret operations: in positioned docs,
+   *  the `.doc-posbox` holding the saved/live caret; otherwise the edit root. */
+  function caretHost() {
+    if (base && base.layout === 'positioned') {
+      const node = (savedRange && savedRange.startContainer) || (window.getSelection() && window.getSelection().anchorNode);
+      const elNode = node && (node.nodeType === 3 ? node.parentElement : node);
+      const box = elNode && elNode.closest && elNode.closest('.doc-posbox');
+      if (box) return box;
+    }
+    return editRoot;
+  }
+
+  /** Insert a plain string (e.g. a math/science symbol) at the current caret. If
+   *  focus has moved to the Symbol panel, fall back to the last saved caret so the
+   *  glyph still lands in the document without disturbing existing formatting. */
+  function insertText(str) {
+    if (!str) return;
+    const sel = window.getSelection();
+    // Decide the target range BEFORE focusing editRoot: focusing a contenteditable
+    // can reset the live selection to its start, which would drop the glyph at the
+    // top of the document instead of at the real caret / last saved position.
+    let range = null;
+    if (sel && sel.rangeCount && editRoot.contains(sel.getRangeAt(0).startContainer)) {
+      range = sel.getRangeAt(0).cloneRange();
+    } else if (savedRange && editRoot.contains(savedRange.startContainer)) {
+      range = savedRange.cloneRange();
+    } else {
+      // No known caret — append at the very end of the editable body.
+      range = document.createRange();
+      range.selectNodeContents(editRoot);
+      range.collapse(false);
+    }
+    editRoot.focus();
+    range.deleteContents();
+    const node = document.createTextNode(str);
+    range.insertNode(node);
+    // Drop the caret just after the inserted glyph so repeated inserts append.
+    const r = document.createRange();
+    r.setStartAfter(node);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    savedRange = r.cloneRange();
+    if (hfEditing) onHfInput(); else commit();
+    emitSelection();
+  }
+
   /* ---- header/footer configuration (Insert menu + settings dialog) ---- */
   function editHeader() { enterHf('header', Math.max(0, Math.min(pageCount - 1, getCurrentPage() - 1))); }
   function editFooter() { enterHf('footer', Math.max(0, Math.min(pageCount - 1, getCurrentPage() - 1))); }
@@ -1053,6 +1259,10 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   });
 
   page.addEventListener('pointerdown', (e) => {
+    // A left-click anywhere that isn't a resize handle clears a selected text box, so
+    // clicking returns to normal text editing. (Handle drags stopPropagation, so they
+    // never reach here; right-click is handled by the contextmenu listener below.)
+    if (e.button === 0 && boxSel && !e.target.closest?.('.doc-imgsel__h')) deselectBox();
     const fig = e.target.closest?.('.doc-image');
     if (fig && page.contains(fig)) {
       if (e.button === 2) return; // right-click → let contextmenu handle it
@@ -1061,6 +1271,14 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       if (e.button === 0) startImageMove(e, fig); // drag the body to reposition
     } else if (!e.target.closest?.('.doc-imgsel')) {
       deselectImage();
+      // Positioned docs: the page container is inert, so a left-click that isn't on a
+      // text box (baked graphics, or the gap between line-boxes) would place no caret
+      // and typing would do nothing. Route it to the nearest box so clicking anywhere
+      // near text starts editing. Direct clicks on a box fall through to the browser
+      // (native caret + drag-select preserved).
+      if (base && base.layout === 'positioned' && e.button === 0 && !e.target.closest?.('.doc-posbox')) {
+        if (focusNearestPosbox(e.clientX, e.clientY)) e.preventDefault();
+      }
     }
   });
 
@@ -1076,6 +1294,15 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       // images keep the existing shape menu (unchanged).
       if (fig.classList.contains('doc-chart')) openChartMenu(fig, e.clientX, e.clientY);
       else openShapeMenu(fig, e.clientX, e.clientY);
+      return;
+    }
+    // Right-click a positioned text box → select it as an object and open its menu
+    // (resize handles + background opacity + delete). Any box, whenever needed.
+    const box = e.target.closest?.('.doc-posbox');
+    if (box && page.contains(box) && base && base.layout === 'positioned') {
+      e.preventDefault();
+      selectBox(box);
+      openBoxMenu(box, e.clientX, e.clientY);
     }
   });
 
@@ -2120,6 +2347,21 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       action('Duplicate', () => duplicateFigure(fig)),
       action('Delete', () => deleteFigure(fig)),
     );
+    // Text wrapping — lets the user place the image/shape without covering text
+    // (wrap left/right reflow the words around it; behind keeps text on top).
+    items.push(el('div', { class: 'doc-cmenu__sep' }));
+    items.push(el('div', { class: 'doc-cmenu__grouplbl' }, 'Text wrapping'));
+    const wrapItem = (label, mode) => el('button', {
+      class: `doc-cmenu__item${currentWrap(fig) === mode ? ' is-active' : ''}`, type: 'button',
+      onClick: () => { closeShapeMenu(); setWrap(fig, mode); selectImage(fig); },
+    }, label);
+    items.push(
+      wrapItem('In line with text', 'inline'),
+      wrapItem('Wrap text — left', 'left'),
+      wrapItem('Wrap text — right', 'right'),
+      wrapItem('Behind text', 'behind'),
+      wrapItem('In front of text', 'front'),
+    );
 
     shapeMenu = el('div', {
       class: 'doc-cmenu', role: 'menu',
@@ -2153,8 +2395,78 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   let chartDataPanel = null;
   let pointInput = null; // inline editor for a per-point custom label
 
+  // Uncropped data URL — the fallback when content measurement isn't available.
   const chartSvgUrlOf = (chart) =>
     `data:image/svg+xml,${encodeURIComponent(renderChartSvg(chart, { width: chart.width, height: chart.height }))}`;
+
+  /* ---- content-fit: an inserted chart's bounds hug the actual graphic ---- *
+   * A chart SVG is a fixed canvas with the graphic (e.g. a centred pie) filling
+   * only part of it. We measure the real drawn content (getBBox on the render's
+   * `.chart-content` group) and crop the SVG's viewBox to it, so the inserted
+   * object — and therefore text wrapping, pagination and export — uses the tight
+   * dimensions rather than a big empty box. This is generic: it works for EVERY
+   * chart type off the actual geometry, with no per-type hardcoding.               */
+  const CHART_FIT_PAD = 8;
+  // A fixed reference canvas per TYPE (independent of the display size) keeps the
+  // measured content box — and the fitted aspect ratio — stable across data edits
+  // and resizes, so there's no shrink/grow feedback loop.
+  function chartLayoutDims(chart) {
+    const d = sampleChart(chart.type || 'pie');
+    return { lw: Math.max(120, d.width || 480), lh: Math.max(100, d.height || 320) };
+  }
+  function measureChartBox(chart, lw, lh) {
+    try {
+      const str = renderChartSvg(chart, { width: lw, height: lh });
+      const svg = new DOMParser().parseFromString(str, 'image/svg+xml').documentElement;
+      if (!svg || svg.tagName === 'parsererror' || svg.getElementsByTagName('parsererror').length) return null;
+      Object.assign(svg.style, { position: 'absolute', left: '-99999px', top: '0', width: `${lw}px`, height: `${lh}px`, visibility: 'hidden' });
+      document.body.appendChild(svg);
+      let box = null;
+      try {
+        const g = svg.querySelector('.chart-content') || svg;
+        const b = g.getBBox();
+        if (b && b.width > 0 && b.height > 0) box = { x: b.x, y: b.y, w: b.width, h: b.height };
+      } catch { box = null; }
+      svg.remove();
+      return box;
+    } catch { return null; }
+  }
+  /** Crop view + display size. `targetW` = desired object width (null → natural content px). */
+  function fitChartView(chart, targetW) {
+    const { lw, lh } = chartLayoutDims(chart);
+    const box = measureChartBox(chart, lw, lh);
+    if (!box || box.w < 8 || box.h < 8) return null;
+    const pad = CHART_FIT_PAD;
+    // Crop to the exact content box (+pad). Don't clamp the origin to 0 — a viewBox may
+    // start at a negative coordinate, so anything drawn at/just past an edge stays fully
+    // visible instead of having its leading edge sliced off.
+    const x = box.x - pad, y = box.y - pad;
+    const w = box.w + pad * 2, h = box.h + pad * 2;
+    const dw = Math.max(40, Math.round(targetW || w));
+    const dh = Math.max(1, Math.round(dw * (h / w)));
+    return { lw, lh, view: { x, y, w, h }, dw, dh };
+  }
+  /** Fit `chart` to its content, sync the spec's width/height, and paint the img.
+   *  `natural` sizes a freshly inserted chart to its true content px; otherwise the
+   *  current display width is kept and the height re-derives from the aspect. */
+  function applyChartRender(fig, chart, { natural = false } = {}) {
+    const img = fig.querySelector('img');
+    const fit = fitChartView(chart, natural ? null : chart.width);
+    if (fit) {
+      chart.width = fit.dw; chart.height = fit.dh;
+      fig.dataset.chart = JSON.stringify(chart);
+      if (img) {
+        img.src = `data:image/svg+xml,${encodeURIComponent(renderChartSvg(chart, { width: fit.lw, height: fit.lh, view: fit.view, outW: fit.dw, outH: fit.dh }))}`;
+        // Width drives the box; height follows the cropped SVG's intrinsic aspect, so
+        // any inline height left over from a live resize drag must be cleared.
+        img.style.width = `${fit.dw}px`;
+        img.style.height = '';
+      }
+    } else {
+      fig.dataset.chart = JSON.stringify(chart);
+      if (img) { img.src = chartSvgUrlOf(chart); img.style.width = `${chart.width || CHART_DEFAULT_W}px`; img.style.height = ''; }
+    }
+  }
 
   function chartSpecOf(fig) {
     try { return normalizeChart(JSON.parse(fig.dataset.chart || '{}')); } catch { return normalizeChart({}); }
@@ -2162,9 +2474,7 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   function setChartSpec(fig, spec, doCommit = true) {
     if (!fig || !fig.classList.contains('doc-chart') || !fig.isConnected) return;
     const chart = normalizeChart(spec);
-    fig.dataset.chart = JSON.stringify(chart);
-    const img = fig.querySelector('img');
-    if (img) img.src = chartSvgUrlOf(chart);
+    applyChartRender(fig, chart, { natural: false });
     if (doCommit) commit();
   }
   function mutateChart(fig, fn, doCommit = true) {
@@ -2182,44 +2492,52 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     fig.dataset.chart = JSON.stringify(chart);
     fig.dataset.wrap = 'inline';
     const img = document.createElement('img');
-    img.src = chartSvgUrlOf(chart);
-    img.style.width = `${chart.width || CHART_DEFAULT_W}px`;
     img.draggable = false;
     fig.appendChild(img);
+    // Fit the fresh insert to its real content (natural size) so it lands as a tight
+    // object, not a large empty canvas — for every chart type.
+    applyChartRender(fig, chart, { natural: true });
     insertBlock(fig, null);
     img.addEventListener('load', () => { selectImage(fig); schedulePaginate(); }, { once: true });
     selectImage(fig);
   }
 
-  /** On resize end, re-render the chart SVG at the new pixel size (stays crisp). */
+  /** On resize end, re-render the chart at the new width (aspect locked to the
+   *  content, so the picture never stretches) and re-crop to its bounds. */
   function applyChartResize(fig, img) {
     const w = Math.round(img.getBoundingClientRect().width);
-    const h = Math.round(img.getBoundingClientRect().height);
-    if (!w || !h) return;
+    if (!w) return;
     const c = chartSpecOf(fig);
-    c.width = w; c.height = h;
-    fig.dataset.chart = JSON.stringify(c);
-    img.src = chartSvgUrlOf(c);
-    img.style.width = `${w}px`;
+    c.width = w;
+    applyChartRender(fig, c, { natural: false });
   }
 
-  /* ---- text wrapping (reuses the existing float/z-order infrastructure) ---- */
+  /* --------------------------- text wrapping ----------------------------- *
+   * Five modes, matching Word/Google Docs:
+   *   inline  — a block image in the text flow (default).
+   *   left    — floats left; text wraps down its right side.
+   *   right   — floats right; text wraps down its left side.
+   *   behind  — freely positioned, painted BEHIND the text (readable on top).
+   *   front   — freely positioned, painted in front (can cover text).
+   * left/right stay in the flow (real CSS float), so nothing is hidden; behind/
+   * front are absolutely positioned so they can sit anywhere on the page.       */
   function currentWrap(fig) {
-    if (!fig.classList.contains('is-floating')) return fig.dataset.wrap === 'square' || fig.dataset.wrap === 'tight' ? fig.dataset.wrap : 'inline';
-    return (parseInt(fig.style.zIndex, 10) || 0) < 0 ? 'behind' : 'front';
+    if (fig.classList.contains('is-floating')) return fig.classList.contains('is-behind') ? 'behind' : 'front';
+    if (fig.classList.contains('is-wrap-left')) return 'left';
+    if (fig.classList.contains('is-wrap-right')) return 'right';
+    return 'inline';
   }
   function setWrap(fig, mode) {
-    if (mode === 'front') {
-      floatFigure(fig); fig.classList.remove('is-behind'); fig.style.zIndex = String(Math.max(3, ...figZ()) + 1);
-    } else if (mode === 'behind') {
-      floatFigure(fig); fig.classList.add('is-behind'); fig.style.zIndex = '-1';
-    } else {
-      // inline / square / tight all flow in-line (the engine wraps at block level;
-      // square & tight are recorded but render as inline to avoid the invisible
-      // line/block artefacts real float-wrap would introduce here).
-      fig.classList.remove('is-floating', 'is-behind');
-      fig.style.left = ''; fig.style.top = ''; fig.style.zIndex = '';
-    }
+    // Clear every mode first, then apply the requested one — modes are exclusive.
+    fig.classList.remove('is-floating', 'is-behind', 'is-wrap-left', 'is-wrap-right');
+    fig.style.left = ''; fig.style.top = ''; fig.style.zIndex = '';
+    if (mode === 'front' || mode === 'behind') {
+      floatFigure(fig);
+      if (mode === 'behind') { fig.classList.add('is-behind'); fig.style.zIndex = '-1'; }
+      else fig.style.zIndex = String(Math.max(3, ...figZ()) + 1);
+    } else if (mode === 'left' || mode === 'right') {
+      fig.classList.add(mode === 'left' ? 'is-wrap-left' : 'is-wrap-right');
+    } // inline: no extra class — the figure is a normal in-flow block.
     fig.dataset.wrap = mode;
     commit();
     schedulePaginate();
@@ -2460,11 +2778,11 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       item('Delete', () => { closeChartPopover(); deleteFigure(fig); }),
       el('div', { class: 'doc-chartpop__sep' }),
       popLabel('Text wrapping'),
-      item('Inline', () => setWrap(fig, 'inline'), currentWrap(fig) === 'inline'),
-      item('Square', () => setWrap(fig, 'square'), currentWrap(fig) === 'square'),
-      item('Tight', () => setWrap(fig, 'tight'), currentWrap(fig) === 'tight'),
-      item('Behind Text', () => setWrap(fig, 'behind'), currentWrap(fig) === 'behind'),
-      item('In Front of Text', () => setWrap(fig, 'front'), currentWrap(fig) === 'front'),
+      item('In line with text', () => setWrap(fig, 'inline'), currentWrap(fig) === 'inline'),
+      item('Wrap text — left', () => setWrap(fig, 'left'), currentWrap(fig) === 'left'),
+      item('Wrap text — right', () => setWrap(fig, 'right'), currentWrap(fig) === 'right'),
+      item('Behind text', () => setWrap(fig, 'behind'), currentWrap(fig) === 'behind'),
+      item('In front of text', () => setWrap(fig, 'front'), currentWrap(fig) === 'front'),
     ]);
   }
 
@@ -2531,24 +2849,30 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   // SVG coords), then map the click there. Same ONE model — no per-type handling.
   function chartHotspotsOf(fig) {
     const c = chartSpecOf(fig);
+    const { lw, lh } = chartLayoutDims(c);
+    // Hotspots are recorded in the LAYOUT coordinate space (the same space the crop
+    // view is expressed in), so clicks map through the cropped viewBox below.
     const hot = [];
-    renderChartSvg(c, { width: c.width, height: c.height, hotspots: hot });
-    return { c, hot };
+    renderChartSvg(c, { width: lw, height: lh, hotspots: hot });
+    return { c, hot, fit: fitChartView(c, c.width) };
   }
   function openPointLabelEditor(fig, clientX, clientY) {
     const img = fig.querySelector('img');
     if (!img) return;
     const rect = img.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const { c, hot } = chartHotspotsOf(fig);
-    if (!hot.length) return;
-    // click → SVG coords (viewBox is 0..width/height, img shown at rect.width/height)
-    const sx = c.width / rect.width, sy = c.height / rect.height;
-    const px = (clientX - rect.left) * sx, py = (clientY - rect.top) * sy;
+    const { hot, fit } = chartHotspotsOf(fig);
+    if (!hot.length || !fit) return;
+    // click (screen) → layout SVG coords, accounting for the cropped view rectangle.
+    const v = fit.view;
+    const lx = v.x + (clientX - rect.left) / rect.width * v.w;
+    const ly = v.y + (clientY - rect.top) / rect.height * v.h;
     let best = null, bestD = Infinity;
-    for (const h of hot) { const d = (h.x - px) ** 2 + (h.y - py) ** 2; if (d < bestD) { bestD = d; best = h; } }
+    for (const h of hot) { const d = (h.x - lx) ** 2 + (h.y - ly) ** 2; if (d < bestD) { bestD = d; best = h; } }
     if (!best || bestD > 90 * 90) return; // clicked too far from any data point
-    showPointInput(fig, best.id, rect.left + best.x / sx, rect.top + best.y / sy);
+    const screenX = rect.left + (best.x - v.x) / v.w * rect.width;
+    const screenY = rect.top + (best.y - v.y) / v.h * rect.height;
+    showPointInput(fig, best.id, screenX, screenY);
   }
   function showPointInput(fig, id, screenX, screenY) {
     closePointInput();
@@ -2627,7 +2951,139 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   function stripImgSel() {
     page.querySelectorAll('.doc-imgsel').forEach((o) => o.remove());
     page.querySelectorAll('.doc-image.is-selected').forEach((f) => f.classList.remove('is-selected'));
-    imgSel = null;
+    page.querySelectorAll('.doc-posbox--selected').forEach((b) => b.classList.remove('doc-posbox--selected'));
+    imgSel = null; boxSel = null;
+  }
+
+  /* ---------------- positioned text-box: select, resize, opacity ----------------
+   * In a positioned (exact-layout) doc, right-clicking a `.doc-posbox` selects it as
+   * an OBJECT (corner resize handles + a context menu to resize / set the box's
+   * background opacity / delete). A normal click still edits the text. The text
+   * itself always stays fully solid — only the box BACKGROUND fades (rgba), never CSS
+   * opacity. Reuses the image selection overlay/handles (`.doc-imgsel`). */
+  let boxSel = null;
+  function selectBox(box) {
+    if (boxSel === box) return;
+    deselectBox();
+    deselectImage();
+    boxSel = box;
+    box.classList.add('doc-posbox--selected');
+    box.dataset.wasEditable = box.getAttribute('contenteditable') || 'true';
+    box.contentEditable = 'false'; // so a handle drag never drops a caret / edits text
+    const overlay = document.createElement('div');
+    overlay.className = 'doc-imgsel';
+    overlay.contentEditable = 'false';
+    for (const corner of ['nw', 'ne', 'sw', 'se']) {
+      const h = document.createElement('div');
+      h.className = `doc-imgsel__h doc-imgsel__h--${corner}`;
+      h.addEventListener('pointerdown', (e) => startBoxResize(e, box, corner, h));
+      overlay.appendChild(h);
+    }
+    box.appendChild(overlay);
+  }
+  function deselectBox() {
+    if (!boxSel) return;
+    const b = boxSel;
+    boxSel = null;
+    closeBoxMenu();
+    b.classList.remove('doc-posbox--selected');
+    b.querySelector(':scope > .doc-imgsel')?.remove();
+    b.contentEditable = b.dataset.wasEditable || 'true';
+    delete b.dataset.wasEditable;
+  }
+  function startBoxResize(e, box, corner, handle) {
+    e.preventDefault();
+    e.stopPropagation();
+    const z = zoom || 1;
+    const sx = e.clientX, sy = e.clientY;
+    const rect = box.getBoundingClientRect();
+    const w0 = parseFloat(box.style.width) || rect.width / z;
+    const h0 = parseFloat(box.style.minHeight) || rect.height / z;
+    const x0 = parseFloat(box.style.left) || 0;
+    const top0 = parseFloat(box.style.top) || 0;
+    const y0 = parseFloat(box.dataset.y) || 0;
+    const west = corner === 'nw' || corner === 'sw';
+    const north = corner === 'nw' || corner === 'ne';
+    const cs = getComputedStyle(page);
+    const maxW = Math.max(40, page.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0));
+    try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const onMove = (ev) => {
+      const dx = (ev.clientX - sx) / z, dy = (ev.clientY - sy) / z;
+      let w = w0, h = h0, x = x0, top = top0, y = y0;
+      if (west) { w = Math.max(40, Math.min(maxW, w0 - dx)); x = x0 + (w0 - w); } else { w = Math.max(40, Math.min(maxW, w0 + dx)); }
+      if (north) { h = Math.max(14, h0 - dy); top = top0 + (h0 - h); y = y0 + (h0 - h); } else { h = Math.max(14, h0 + dy); }
+      box.style.width = `${Math.round(w)}px`;
+      box.style.minHeight = `${Math.round(h)}px`;
+      box.style.left = `${Math.round(x)}px`;
+      box.style.top = `${Math.round(top)}px`;
+      box.dataset.w = String(Math.round(w)); box.dataset.h = String(Math.round(h));
+      box.dataset.x = String(Math.round(x)); box.dataset.y = String(Math.round(y));
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      commit(); // persist the new frame (readPosbox reads style/dataset back)
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+  }
+
+  /** Fade/solid a box's BACKGROUND (rgba) without touching the text. Ensures the box
+   *  carries a base fill colour so the change round-trips through readPosbox. */
+  function applyBoxOpacity(box, a) {
+    const alpha = Math.max(0, Math.min(1, a));
+    const base = (box.dataset.fill || 'ffffff').replace(/^#/, '');
+    box.dataset.fill = base;
+    box.dataset.opacity = String(alpha);
+    if (alpha >= 0.999) box.style.background = `#${base}`;
+    else if (alpha <= 0.001) box.style.background = 'transparent';
+    else {
+      const r = parseInt(base.slice(0, 2), 16) || 0, g = parseInt(base.slice(2, 4), 16) || 0, b = parseInt(base.slice(4, 6), 16) || 0;
+      box.style.background = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+  }
+
+  let boxMenu = null;
+  function closeBoxMenu() {
+    if (!boxMenu) return;
+    boxMenu.remove(); boxMenu = null;
+    document.removeEventListener('pointerdown', onDocDownForBoxMenu, true);
+  }
+  function onDocDownForBoxMenu(e) {
+    if (boxMenu && !boxMenu.contains(e.target) && !(boxSel && boxSel.contains(e.target))) closeBoxMenu();
+  }
+  function openBoxMenu(box, x, y) {
+    closeBoxMenu();
+    const cur = (box.dataset.opacity != null && box.dataset.opacity !== '')
+      ? Math.round(parseFloat(box.dataset.opacity) * 100)
+      : (box.dataset.fill ? 100 : 0);
+    const pct = el('span', { class: 'doc-cmenu__pct' }, `${cur}%`);
+    const slider = el('input', {
+      type: 'range', min: '0', max: '100', value: String(cur), class: 'doc-cmenu__slider',
+      onInput: (e) => { pct.textContent = `${e.target.value}%`; applyBoxOpacity(box, (+e.target.value) / 100); },
+      onChange: () => commit(),
+    });
+    const action = (label, fn) => el('button', { class: 'doc-cmenu__item', type: 'button', onClick: () => { closeBoxMenu(); fn(); } }, label);
+    const items = [
+      el('div', { class: 'doc-cmenu__title' }, 'Text box'),
+      el('div', { class: 'doc-cmenu__opacity' }, [el('span', { class: 'doc-cmenu__lbl' }, 'Box opacity'), slider, pct]),
+      el('div', { class: 'doc-cmenu__sep' }),
+      action('Make transparent', () => { applyBoxOpacity(box, 0); commit(); }),
+      action('Solid background', () => { applyBoxOpacity(box, 1); commit(); }),
+      el('div', { class: 'doc-cmenu__sep' }),
+      el('div', { class: 'doc-cmenu__grouplbl' }, 'Drag the corner handles to resize'),
+      action('Delete box', () => { const b = boxSel; deselectBox(); b?.remove(); commit(); }),
+    ];
+    boxMenu = el('div', {
+      class: 'doc-cmenu', role: 'menu',
+      onContextmenu: (e) => e.preventDefault(),
+      onPointerdown: (e) => e.stopPropagation(),
+    }, items);
+    document.body.appendChild(boxMenu);
+    const mw = boxMenu.offsetWidth || 220, mh = boxMenu.offsetHeight || 220;
+    boxMenu.style.left = `${Math.round(Math.min(x, window.innerWidth - mw - 8))}px`;
+    boxMenu.style.top = `${Math.round(Math.min(y, window.innerHeight - mh - 8))}px`;
+    setTimeout(() => document.addEventListener('pointerdown', onDocDownForBoxMenu, true), 0);
   }
 
   function startImageResize(e, fig, img, corner, handle) {
@@ -2679,8 +3135,39 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     const pr = page.getBoundingClientRect();
     const fr = fig.getBoundingClientRect();
     fig.classList.add('is-floating');
-    fig.style.left = `${Math.round(fr.left - pr.left)}px`;
-    fig.style.top = `${Math.round(fr.top - pr.top)}px`;
+    // Lift in place, but clamp into the printable area so the very first frame is
+    // already inside the margins (matches the drag clamp above).
+    const mm = pageMargins();
+    const maxL = Math.max(mm.left, page.clientWidth - mm.right - fig.offsetWidth);
+    const maxT = Math.max(mm.top, page.clientHeight - mm.bottom - fig.offsetHeight);
+    fig.style.left = `${Math.round(Math.max(mm.left, Math.min(fr.left - pr.left, maxL)))}px`;
+    fig.style.top = `${Math.round(Math.max(mm.top, Math.min(fr.top - pr.top, maxT)))}px`;
+  }
+
+  /** The top-level block sitting under a screen point (skipping the figure being
+   *  dragged and any inert spacers) — the re-anchor target for a wrapped image. */
+  function blockUnderPoint(x, y, exclude) {
+    for (const elm of document.elementsFromPoint(x, y)) {
+      const b = blockOf(elm);
+      if (b && b !== exclude && editRoot.contains(b)
+        && !b.classList.contains('doc-pagebreak') && !b.classList.contains('is-floating')) return b;
+    }
+    return null;
+  }
+
+  /** Drop a wrapped figure back into the flow: re-anchor it before the paragraph
+   *  under the pointer and pick the side (left/right) from the drop X, so the text
+   *  reflows around its new home instead of the image floating over the words. */
+  function reanchorWrap(fig, x, y) {
+    const target = blockUnderPoint(x, y, fig);
+    const pr = page.getBoundingClientRect();
+    const side = (x - pr.left) > page.clientWidth / 2 ? 'right' : 'left';
+    fig.classList.remove('is-floating', 'is-behind', 'is-moving');
+    fig.style.left = ''; fig.style.top = ''; fig.style.zIndex = '';
+    if (target && target !== fig) editRoot.insertBefore(fig, target);
+    fig.classList.remove('is-wrap-left', 'is-wrap-right');
+    fig.classList.add(side === 'right' ? 'is-wrap-right' : 'is-wrap-left');
+    fig.dataset.wrap = side;
   }
 
   function startImageMove(e, fig) {
@@ -2688,22 +3175,29 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     const fr = fig.getBoundingClientRect();
     const grabX = e.clientX - fr.left; // where inside the image the pointer grabbed
     const grabY = e.clientY - fr.top;
+    // A wrapped image re-anchors on drop (keeps flowing text around it); front/
+    // behind/inline images drag to a free absolute position.
+    const wasWrapped = currentWrap(fig) === 'left' || currentWrap(fig) === 'right';
     let moving = false;
+    let lastX = e.clientX, lastY = e.clientY;
     try { page.setPointerCapture(e.pointerId); } catch { /* ignore */ }
 
     const onMove = (ev) => {
+      lastX = ev.clientX; lastY = ev.clientY;
       if (!moving) {
         if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return; // jitter → still a click
         moving = true;
         fig.classList.add('is-moving');
-        floatFigure(fig);
+        floatFigure(fig); // lift for smooth dragging; wrapped ones re-anchor on drop
       }
       const pr = page.getBoundingClientRect();
-      // Keep the image within the page's padding box (0 … clientWidth/Height).
-      const maxL = Math.max(0, page.clientWidth - fig.offsetWidth);
-      const maxT = Math.max(0, page.clientHeight - fig.offsetHeight);
-      const left = Math.max(0, Math.min((ev.clientX - grabX) - pr.left, maxL));
-      const top = Math.max(0, Math.min((ev.clientY - grabY) - pr.top, maxT));
+      // Keep the image inside the printable area (within the page margins), so a
+      // dragged image never spills into the margin or off the sheet.
+      const mm = pageMargins();
+      const maxL = Math.max(mm.left, page.clientWidth - mm.right - fig.offsetWidth);
+      const maxT = Math.max(mm.top, page.clientHeight - mm.bottom - fig.offsetHeight);
+      const left = Math.max(mm.left, Math.min((ev.clientX - grabX) - pr.left, maxL));
+      const top = Math.max(mm.top, Math.min((ev.clientY - grabY) - pr.top, maxT));
       fig.style.left = `${Math.round(left)}px`;
       fig.style.top = `${Math.round(top)}px`;
     };
@@ -2713,8 +3207,10 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       page.removeEventListener('pointercancel', onUp);
       try { page.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       if (!moving) return; // plain click — selection already handled above
+      if (wasWrapped) reanchorWrap(fig, lastX, lastY);
       fig.classList.remove('is-moving');
       commit();
+      schedulePaginate();
       emitSelection();
     };
     page.addEventListener('pointermove', onMove);
@@ -2725,7 +3221,14 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   /** Drop a non-text block after the caret's block and keep editing flowing. */
   function insertBlock(node, caretInto) {
     const sel = window.getSelection();
-    const ref = sel && sel.rangeCount && editRoot.contains(sel.focusNode) ? blockOf(sel.focusNode) : null;
+    // Reference block, in order of preference: the live caret, the last caret we
+    // saw (survives a button click that stole focus), then the block the user is
+    // currently looking at. Only as a last resort do we append at the very end —
+    // otherwise a fresh insert on a just-opened multi-page doc lands off-screen.
+    const live = sel && sel.rangeCount && editRoot.contains(sel.focusNode) ? blockOf(sel.focusNode) : null;
+    const ref = live
+      || (lastCaretBlock && editRoot.contains(lastCaretBlock) ? lastCaretBlock : null)
+      || visibleAnchorBlock();
     if (ref) ref.after(node);
     else editRoot.appendChild(node);
     ensureTrailingParagraph();
@@ -2739,6 +3242,21 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     sel?.addRange(r);
     commit();
     emitSelection();
+  }
+
+  /** The top-level content block the user is currently looking at — the first one
+   *  reaching into the scroll viewport. Used so an insert with no caret still
+   *  lands on the visible page, not at the far end of a long document. */
+  function visibleAnchorBlock() {
+    const kids = Array.from(editRoot.children).filter((n) =>
+      !n.classList.contains('doc-pagebreak') && !n.classList.contains('is-floating'));
+    if (!kids.length) return null;
+    const vpTop = container.getBoundingClientRect().top + 8;
+    for (const b of kids) {
+      const r = b.getBoundingClientRect();
+      if (r.bottom >= vpTop) return b;
+    }
+    return kids[kids.length - 1];
   }
 
   /** Guarantee an editable paragraph after trailing non-text blocks. */
@@ -2814,6 +3332,14 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
 
   function onSelChange() {
     if (!editRoot.contains(window.getSelection()?.focusNode || null)) { tableTools.hidden = true; return; }
+    // Remember where the caret is so Insert-image/table/chart lands here even after
+    // clicking a toolbar/menu button moves focus off the page.
+    const sel = window.getSelection();
+    const b = blockOf(sel?.focusNode);
+    if (b) lastCaretBlock = b;
+    // Snapshot the live caret so Insert-symbol can drop a glyph exactly here even
+    // after focus moves to the (separate, floating) symbol panel or its search box.
+    if (sel && sel.rangeCount) savedRange = sel.getRangeAt(0).cloneRange();
     clearTimeout(selTimer);
     selTimer = setTimeout(emitSelection, 40);
   }
@@ -2848,12 +3374,27 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
 
   /* ------------------------------ lifecycle ----------------------------- */
   function focus() {
+    // Positioned docs: the page container is inert, so focus the first editable
+    // box (and drop the caret in it) — otherwise focusing the page does nothing
+    // and the user would have to click a box before they can type.
+    if (base && base.layout === 'positioned') {
+      const first = page.querySelector(':scope > .doc-posbox');
+      if (first) { first.focus(); return; }
+    }
     page.focus();
   }
   function setEditable(on) {
     if (!on && hfEditing) exitHf(false); // leave any running head/foot edit first
-    page.contentEditable = on ? 'true' : 'false';
+    // Positioned (exact-layout) documents keep the page container non-editable and
+    // make each `.doc-posbox` individually editable, so the caret lands in the box
+    // at its coordinates (like the PDF editor) rather than in one flowing column.
+    const positioned = base && base.layout === 'positioned';
+    page.contentEditable = (on && !positioned) ? 'true' : 'false';
+    if (positioned) {
+      for (const b of page.querySelectorAll(':scope > .doc-posbox')) b.contentEditable = on ? 'true' : 'false';
+    }
     page.classList.toggle('is-readonly', !on);
+    page.classList.toggle('is-positioned', !!positioned);
     // Suspend workspace shortcuts while this editor is live; restore them on Done.
     if (on && !endEditing) endEditing = keyboard.beginEditing();
     else if (!on && endEditing) { endEditing(); endEditing = null; }
@@ -2911,6 +3452,8 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     getModel,
     getPageSetup,
     setPageSetup,
+    getShowMargins,
+    setShowMargins,
     isLoaded,
     setEditable,
     focus,
@@ -2946,6 +3489,8 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     editHeader,
     editFooter,
     insertField,
+    insertText,
+    restoreCaret,
     getHfSettings,
     setHfSettings,
     getFormat: currentFormat,

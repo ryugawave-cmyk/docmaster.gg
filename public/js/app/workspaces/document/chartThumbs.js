@@ -13,7 +13,7 @@
  * families (financial / business / statistical / hierarchy / project) preview through the
  * REAL engine at thumbnail size, so their tile matches exactly what gets inserted.
  */
-import { renderChartSvg, defaultChart } from '../../editor/chartRender.js';
+import { renderChartSvg, sampleChart } from '../../editor/chartRender.js';
 
 // Consistent preview canvas — every tile shares this viewBox, camera angle,
 // lighting and margins so the grid reads as one cohesive, polished set.
@@ -615,7 +615,7 @@ export function chartThumb(typeId) {
   if (fn) return fn();
   // Extended library types: render the ACTUAL chart small, with text stripped for a
   // clean preview, so the tile faithfully represents what will be inserted.
-  const s = defaultChart(typeId);
+  const s = sampleChart(typeId);
   Object.assign(s.options, {
     showTitle: false, showLegend: false, showCatLabels: false,
     showDataLabels: false, showPercentLabels: false, showAxisTitles: false,

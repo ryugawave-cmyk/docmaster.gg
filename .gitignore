@@ -36,3 +36,6 @@ r2-manifest.json
 # Cloudflare / Wrangler
 .wrangler/
 .dev.vars
+
+# Vendored on-device OCR engine (large binaries; reproduce with `npm run vendor:ocr`)
+public/vendor/tesseract/

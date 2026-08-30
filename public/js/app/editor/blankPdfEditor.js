@@ -1447,7 +1447,11 @@ export function createBlankPdfEditor({
       fontSize: Math.max(5, t.fontSize || 16),
       color: t.color || '#111827',
       align: 'left', lineHeight: 1, letterSpacing: 0,
-      bold: false, italic: false, underline: false, strike: false,
+      // Preserve the weight/style detected from the PDF's embedded font so bold
+      // headings (and bold runs in paragraphs/tables/captions) stay bold in the DOC.
+      // Only what the font actually reports — never blanket-bold.
+      bold: !!t.bold, italic: !!t.italic, underline: !!t.underline, strike: false,
+      fontWeight: t.fontWeight || (t.bold ? 700 : 400),
       highlight: 'transparent', boxBg: t.boxBg || 'transparent',
       textCase: 'none', opacity: 1, locked: false,
     }));

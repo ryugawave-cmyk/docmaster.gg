@@ -16,6 +16,7 @@ import { DEFAULT_MARKS } from '../../model/documentModel.js';
 import * as TG from '../../model/tableGrid.js';
 import { parseTtf } from './ttf.js';
 import { rowsToXlsxBlob } from './xlsx.js';
+import { SLIDE_MASTER, MASTER_RELS, SLIDE_LAYOUT, LAYOUT_RELS, THEME } from './pptx.js';
 
 /**
  * A table block stores only master cells per row (covered positions omitted,
@@ -345,10 +346,32 @@ export async function blockModelToDocx(doc, { zip = zipBlob } = {}) {
     return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${borders}</w:tblPr>${grid}${rows}</w:tbl>`;
   }
 
+  /** Which side an image should sit on in Word: explicit wrap side wins; a freely
+   *  positioned (dragged) image maps its horizontal centre within the content box
+   *  to left / centre / right; otherwise fall back to its own text alignment. */
+  function imageAlign(block) {
+    if (block.wrap === 'left') return 'left';
+    if (block.wrap === 'right') return 'right';
+    if (block.left != null) {
+      const pageW = (doc.page && doc.page.width) || 816;
+      const m = (doc.page && doc.page.margins) || { left: 96, right: 96 };
+      const contentL = m.left;
+      const contentW = Math.max(1, pageW - m.left - m.right);
+      const centre = block.left + (block.width || 0) / 2 - contentL;
+      if (centre >= (contentW * 2) / 3) return 'right';
+      if (centre <= contentW / 3) return 'left';
+      return 'center';
+    }
+    return block.align === 'right' || block.align === 'center' ? block.align : 'left';
+  }
+
   function imageXml(block) {
     try {
-      // Charts/shapes stored as SVG were pre-rasterised to PNG above.
+      // Charts/shapes stored as SVG were pre-rasterised to PNG above. If a raster
+      // isn't available (rasterisation unavailable/failed), skip rather than embed
+      // raw SVG bytes under a .png name — that would be an unreadable broken image.
       const src = svgRaster.get(block.src) || block.src;
+      if (/^data:image\/svg/i.test(src)) return '<w:p/>';
       const bytes = dataURLToBytes(src);
       const ext = mimeExt(src);
       const name = `image${media.length + 1}.${ext}`;
@@ -358,14 +381,58 @@ export async function blockModelToDocx(doc, { zip = zipBlob } = {}) {
       const cx = Math.round((block.width || 480) * PX_TO_EMU);
       const cy = Math.round((block.height || Math.round((block.width || 480) * 0.66)) * PX_TO_EMU);
       const id = drawSeq++;
-      return `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
-        `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}"/>` +
+      // The DrawingML picture payload — shared by the inline and the anchored
+      // (floating / text-wrapped) wrappers below.
+      const picXml =
         `<a:graphic ${A_NS}><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
         `<pic:pic ${PIC_NS}><pic:nvPicPr><pic:cNvPr id="${id}" name="Picture ${id}"/><pic:cNvPicPr/></pic:nvPicPr>` +
         `<pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
         `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
         `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>` +
-        `</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+        `</a:graphicData></a:graphic>`;
+
+      // A dragged image carries absolute page coordinates (left/top, from the page's
+      // top-left including margins); side-wrap keeps the picture in the flow but
+      // floats it left/right with text reflowing beside it. Both need a floating
+      // <wp:anchor> so Word reproduces the editor's placement — an inline picture
+      // would instead drop onto its own line and shove the following text down.
+      const floating = block.left != null && block.top != null;
+      const wrapMode = block.wrap;
+      if (floating || wrapMode === 'left' || wrapMode === 'right') {
+        const behind = wrapMode === 'behind' ? 1 : 0;
+        // Distinct relativeHeight per picture preserves z-order; nudge by z so a
+        // "bring to front" image stacks above earlier ones.
+        const relHeight = 251658240 + Math.max(0, Number.isFinite(block.z) ? block.z : 0);
+        let posH, posV, wrapTag;
+        if (floating) {
+          const x = Math.round((block.left || 0) * PX_TO_EMU);
+          const yv = Math.round((block.top || 0) * PX_TO_EMU);
+          posH = `<wp:positionH relativeFrom="page"><wp:posOffset>${x}</wp:posOffset></wp:positionH>`;
+          posV = `<wp:positionV relativeFrom="page"><wp:posOffset>${yv}</wp:posOffset></wp:positionV>`;
+          wrapTag = '<wp:wrapNone/>'; // front/behind: no text reflow, just overlap
+        } else {
+          // Side-wrap: pin to the correct margin, keep vertical in the text flow, and
+          // let text hug the opposite side (left image → text on the right).
+          posH = `<wp:positionH relativeFrom="margin"><wp:align>${wrapMode}</wp:align></wp:positionH>`;
+          posV = `<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>`;
+          wrapTag = `<wp:wrapSquare wrapText="${wrapMode === 'right' ? 'left' : 'right'}"/>`;
+        }
+        return `<w:p><w:r><w:drawing>` +
+          `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="${relHeight}" behindDoc="${behind}" locked="0" layoutInCell="1" allowOverlap="1">` +
+          `<wp:simplePos x="0" y="0"/>${posH}${posV}` +
+          `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${wrapTag}` +
+          `<wp:docPr id="${id}" name="Picture ${id}"/><wp:cNvGraphicFramePr/>${picXml}` +
+          `</wp:anchor></w:drawing></w:r></w:p>`;
+      }
+
+      // Inline (default): the picture flows on its own paragraph. Word inline images
+      // are left-aligned by default, so map any right/centre placement onto the
+      // paragraph's alignment.
+      const align = imageAlign(block);
+      const pPr = align !== 'left' ? `<w:pPr><w:jc w:val="${align}"/></w:pPr>` : '';
+      return `<w:p>${pPr}<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
+        `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}"/>${picXml}` +
+        `</wp:inline></w:drawing></w:r></w:p>`;
     } catch {
       return '<w:p/>';
     }
@@ -442,7 +509,10 @@ export async function blockModelToDocx(doc, { zip = zipBlob } = {}) {
         `${relHf}${relImages}</Relationships>`,
     },
     ...hfFiles.map((f) => ({ name: `word/${f.file}`, data: f.xml })),
-    ...media.map((m) => ({ name: `word/${m.name}`, data: m.bytes })),
+    // Image parts live under word/media/, matching the relationship targets
+    // (Target="media/imageN.ext"). Writing them at word/imageN.ext instead left
+    // every embedded picture unresolved → a broken-image icon in Word.
+    ...media.map((m) => ({ name: `word/media/${m.name}`, data: m.bytes })),
   ];
 
   return zip(entries, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -571,21 +641,29 @@ function makeFontRecord(key, ttf) {
 const pickFont = (fonts, m) => fonts[`${m.bold ? 1 : 0}${m.italic ? 1 : 0}`];
 
 /** Encode a string as Identity-H 2-byte glyph ids (hex). Characters the font
- *  lacks map to glyph 0 (.notdef); everything in its cmap round-trips exactly. */
+ *  lacks map to glyph 0 (.notdef); rather than emit that — which draws a hollow
+ *  "tofu" box (e.g. a stray U+FFFC object-replacement char left by an import) — we
+ *  SKIP it, so an unsupported character simply doesn't render. Measured width
+ *  (glyphWidthPx) skips the same glyphs, so wrapping stays exact. */
 function encodeGlyphs(text, rec) {
   let hex = '';
   for (const ch of String(text)) {
     const gid = rec.ttf.cmap.get(ch.codePointAt(0)) || 0;
+    if (!gid) continue; // .notdef → drop, never draw a box
     hex += gid.toString(16).padStart(4, '0');
   }
   return hex;
 }
 
 /** Text advance in CSS px, using the embedded font's real metrics (so measure ==
- *  render == PDF). */
+ *  render == PDF). Skips .notdef glyphs to match encodeGlyphs. */
 function glyphWidthPx(text, rec, fontSizePx) {
   let units = 0;
-  for (const ch of String(text)) units += rec.ttf.advanceWidth(rec.ttf.cmap.get(ch.codePointAt(0)) || 0);
+  for (const ch of String(text)) {
+    const gid = rec.ttf.cmap.get(ch.codePointAt(0)) || 0;
+    if (!gid) continue;
+    units += rec.ttf.advanceWidth(gid);
+  }
   return (units / rec.ttf.unitsPerEm) * fontSizePx;
 }
 
@@ -655,81 +733,142 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
   let y = pageHpt - marginPt - headerReservePx(0) * PX_TO_PT;   // baseline cursor
   const fontsUsed = new Set();
 
+  // A left/right side-wrapped image reserves a rectangular column so following
+  // text flows *beside* it (Word's wrapSquare), instead of being pushed below.
+  // Cleared at each page break — a float doesn't carry to the next page.
+  const FLOAT_GAP = 14;   // px gutter between a floated picture and the text
+  let activeFloat = null; // { side, wPx, topYpt, bottomYpt }
+
   const newPage = () => {
     pages.push({ ops, images });
     ops = []; images = [];
     curPageIdx = pages.length;
     y = pageHpt - marginPt - headerReservePx(curPageIdx) * PX_TO_PT;
+    activeFloat = null;
   };
   const need = (h) => { if (y - h < marginPt + footerReservePx(curPageIdx) * PX_TO_PT) newPage(); };
 
-  // Emit one wrapped, mixed-run line of segments. `indentPx` shifts the left edge.
-  function emitLine(segments, lineHeightPt, indentPx = 0) {
-    need(lineHeightPt);
-    y -= lineHeightPt;
-    let xPx = (doc.page?.margin || 72) + indentPx;
+  /** Left edge + available width (px) for a line whose baseline sits at `atY`,
+   *  shrunk by an active side-float while the baseline is within its vertical band. */
+  function columnAt(atY) {
+    if (activeFloat && atY > activeFloat.bottomYpt && atY < activeFloat.topYpt) {
+      const reserve = activeFloat.wPx + FLOAT_GAP;
+      return activeFloat.side === 'left'
+        ? { leftPx: marginPx + reserve, widthPx: contentWpx - reserve }
+        : { leftPx: marginPx, widthPx: contentWpx - reserve };
+    }
+    return { leftPx: marginPx, widthPx: contentWpx };
+  }
+
+  // Draw one already-fitted line of segments at baseline `baselineY`. `startXpx`
+  // is the line's left edge; `availWpx` is its column width (for centre/right the
+  // slack is distributed, trailing whitespace excluded so the offset stays true).
+  function drawLine(segments, baselineY, startXpx, availWpx, align) {
+    let xPx = startXpx;
+    if (align === 'center' || align === 'right') {
+      let lastInk = -1;
+      for (let i = 0; i < segments.length; i += 1) if (segments[i].text.trim()) lastInk = i;
+      let contentW = 0;
+      for (let i = 0; i <= lastInk; i += 1) contentW += measure(segments[i].text, segments[i].marks);
+      const slack = Math.max(0, availWpx - contentW);
+      xPx += align === 'center' ? slack / 2 : slack;
+    }
     for (const seg of segments) {
       const m = seg.marks;
       const rec = pickFont(fonts, m);
       fontsUsed.add(rec);
       const sizePt = m.fontSize * PX_TO_PT;
       const [r, g, b] = hexToRgb(m.color);
-      ops.push(`BT /${rec.id} ${round(sizePt)} Tf ${r} ${g} ${b} rg 1 0 0 1 ${round(xPx * PX_TO_PT)} ${round(y)} Tm <${encodeGlyphs(seg.text, rec)}> Tj ET`);
+      ops.push(`BT /${rec.id} ${round(sizePt)} Tf ${r} ${g} ${b} rg 1 0 0 1 ${round(xPx * PX_TO_PT)} ${round(baselineY)} Tm <${encodeGlyphs(seg.text, rec)}> Tj ET`);
       if (m.underline) {
         const w = measure(seg.text, m) * PX_TO_PT;
-        const uy = y - sizePt * 0.12;
+        const uy = baselineY - sizePt * 0.12;
         ops.push(`${r} ${g} ${b} RG ${round(sizePt * 0.06)} w ${round(xPx * PX_TO_PT)} ${round(uy)} m ${round(xPx * PX_TO_PT + w)} ${round(uy)} l S`);
       }
       if (m.strike) {
         const w = measure(seg.text, m) * PX_TO_PT;
-        const sy = y + sizePt * 0.3; // through the middle of the glyphs
+        const sy = baselineY + sizePt * 0.3; // through the middle of the glyphs
         ops.push(`${r} ${g} ${b} RG ${round(sizePt * 0.06)} w ${round(xPx * PX_TO_PT)} ${round(sy)} m ${round(xPx * PX_TO_PT + w)} ${round(sy)} l S`);
       }
       xPx += measure(seg.text, m);
     }
   }
 
-  // Word-wrap a run sequence into lines of segments that fit `maxWpx`.
-  function wrapRuns(runs, maxWpx, indentPx = 0) {
-    const lineHeightPx = Math.max(...runs.map((r) => marksOf(r).fontSize), 16) * 1.4;
-    const lineHeightPt = lineHeightPx * PX_TO_PT;
-    let line = [];
-    let lineW = 0;
-    const flush = () => { emitLine(line.length ? line : [{ text: '', marks: DEFAULT_MARKS }], lineHeightPt, indentPx); line = []; lineW = 0; };
-
+  /**
+   * Flow a run sequence into lines, deciding each line's width AT its own vertical
+   * position so text reflows beside an active side-float (Word's wrapSquare). Line
+   * height honours the model's line spacing; `indentPx` shifts the left edge; align
+   * is left/center/right (justify falls back to left — no space stretching here).
+   */
+  function flowRuns(runs, { align = 'left', indentPx = 0, lineHeightMul = null, lineHeightPx = null } = {}) {
+    const maxSize = Math.max(...runs.map((r) => marksOf(r).fontSize), 16);
+    const lhPx = lineHeightPx || maxSize * (lineHeightMul || 1.4);
+    const lhPt = lhPx * PX_TO_PT;
+    // Flatten to whitespace-delimited tokens (spaces kept so widths stay accurate).
+    const toks = [];
     for (const run of runs) {
       const m = marksOf(run);
-      // Split keeping spaces so widths stay accurate; break any over-wide token.
-      const tokens = (run.text || '').split(/(\s+)/).filter((t) => t !== '');
-      for (const raw of tokens) {
-        for (const tok of hardWrap(raw, m, maxWpx)) {
-          const w = measure(tok, m);
-          if (lineW + w > maxWpx && lineW > 0 && tok.trim()) flush();
-          line.push({ text: tok, marks: m });
-          lineW += w;
-        }
-      }
+      for (const t of (run.text || '').split(/(\s+)/)) if (t !== '') toks.push({ text: t, marks: m });
     }
-    flush();
+    if (!toks.length) toks.push({ text: '', marks: DEFAULT_MARKS });
+
+    let i = 0;
+    let firstLine = true;
+    while (i < toks.length) {
+      need(lhPt);
+      y -= lhPt;
+      const col = columnAt(y);
+      const startX = col.leftPx + indentPx;
+      const availW = Math.max(20, col.widthPx - indentPx);
+      // A wrapped line never begins with the whitespace that ended the previous one.
+      if (!firstLine) while (i < toks.length && !toks[i].text.trim()) i += 1;
+      const line = [];
+      let lineW = 0;
+      while (i < toks.length) {
+        const t = toks[i];
+        const w = measure(t.text, t.marks);
+        if (lineW + w > availW && lineW > 0 && t.text.trim()) break; // wrap to next line
+        if (w > availW && t.text.trim()) {
+          // Token wider than a whole (empty) line → hard-break like overflow-wrap.
+          const pieces = hardWrap(t.text, t.marks, availW);
+          line.push({ text: pieces[0], marks: t.marks });
+          const rest = pieces.slice(1).join('');
+          if (rest) toks[i] = { text: rest, marks: t.marks }; else i += 1;
+          break; // the line is now full
+        }
+        line.push(t); lineW += w; i += 1;
+      }
+      drawLine(line.length ? line : [{ text: '', marks: DEFAULT_MARKS }], y, startX, availW, align);
+      firstLine = false;
+    }
   }
 
   for (const block of (doc.blocks || [])) {
     try {
-      if (block.type === 'image') { drawImage(block); y -= 8 * PX_TO_PT; continue; }
+      if (block.type === 'image') {
+        // A dragged (front/behind) image carries absolute page coordinates — draw it
+        // there WITHOUT consuming vertical flow (mirrors the DOCX anchored fix).
+        if (block.left != null && block.top != null) { drawFloatingImage(block); continue; }
+        // Left/right side-wrap: reserve a column so the following text flows beside it.
+        if (block.wrap === 'left' || block.wrap === 'right') { placeWrapFloat(block); continue; }
+        drawImage(block); y -= 8 * PX_TO_PT; continue;
+      }
+      const st = block.style || {};
+      if (st.spaceBefore) y -= st.spaceBefore * PX_TO_PT;
       if (block.type === 'list') {
         block.items.forEach((it, i) => {
           const prefix = block.ordered ? `${i + 1}. ` : '• ';
           const runs = [{ text: prefix, marks: marksOf((it.runs || [])[0] || {}) }, ...(it.runs || [])];
-          wrapRuns(runs, contentWpx - 24, 24);
+          flowRuns(runs, { align: st.align || 'left', indentPx: 24 + (st.indentLeft || 0), lineHeightMul: st.lineHeight, lineHeightPx: st.lineHeightPx });
         });
-        y -= 4 * PX_TO_PT;
+        y -= (st.spaceAfter ?? 4) * PX_TO_PT;
         continue;
       }
       if (block.type === 'table') { drawTable(block); continue; }
       // paragraph / heading
       const runs = (block.runs && block.runs.length) ? block.runs : [{ text: '', marks: {} }];
-      wrapRuns(runs, contentWpx);
-      y -= (block.style?.spaceAfter ?? 10) * PX_TO_PT;
+      flowRuns(runs, { align: st.align || 'left', indentPx: st.indentLeft || 0, lineHeightMul: st.lineHeight, lineHeightPx: st.lineHeightPx });
+      y -= (st.spaceAfter ?? 10) * PX_TO_PT;
     } catch {
       // Never let one malformed block abort the whole export.
     }
@@ -821,8 +960,60 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
       y -= hPt;
       const name = `Im${images.length}_${pages.length}`;
       images.push({ name, bytes: jpg.bytes, w: jpg.w, h: jpg.h });
-      const xPt = marginPt;
-      ops.push(`q ${round(wPx * PX_TO_PT)} 0 0 ${round(hPt)} ${round(xPt)} ${round(y)} cm /${name} Do Q`);
+      // Horizontal placement within the content box: side-wrap pins to that edge,
+      // otherwise honour the image's own alignment (this PDF flow can't reflow text
+      // beside a floated picture, so a wrapped image still takes its own line).
+      const align = block.wrap === 'left' || block.wrap === 'right'
+        ? block.wrap
+        : (block.align === 'right' || block.align === 'center' ? block.align : 'left');
+      let xPx = marginPx;
+      if (align === 'right') xPx = marginPx + Math.max(0, contentWpx - wPx);
+      else if (align === 'center') xPx = marginPx + Math.max(0, (contentWpx - wPx) / 2);
+      ops.push(`q ${round(wPx * PX_TO_PT)} 0 0 ${round(hPt)} ${round(xPx * PX_TO_PT)} ${round(y)} cm /${name} Do Q`);
+    } catch { /* skip bad image */ }
+  }
+
+  /** A dragged (front/behind) image drawn at its absolute page coordinates — left/
+   *  top are measured from the page's top-left (margins included), matching the
+   *  editor. It does NOT touch the flow cursor, so surrounding text keeps its place;
+   *  the picture lands on whichever page the layout is currently on (the same way
+   *  the DOCX export anchors it to the page it sits on). */
+  function drawFloatingImage(block) {
+    try {
+      const jpg = imageData.get(block.src);
+      if (!jpg) return;
+      const wPx = block.width || jpg.w;
+      const hPx = block.height || (jpg.h * (wPx / jpg.w));
+      const leftPx = block.left != null ? block.left : marginPx;
+      const topPx = block.top != null ? block.top : marginPx;
+      const name = `Im${images.length}_${pages.length}`;
+      images.push({ name, bytes: jpg.bytes, w: jpg.w, h: jpg.h });
+      // PDF space is bottom-up: convert the top-left corner to the image's baseline
+      // (bottom edge) on the current page.
+      const yBottomPt = (pageHpx - topPx - hPx) * PX_TO_PT;
+      ops.push(`q ${round(wPx * PX_TO_PT)} 0 0 ${round(hPx * PX_TO_PT)} ${round(leftPx * PX_TO_PT)} ${round(yBottomPt)} cm /${name} Do Q`);
+    } catch { /* skip bad image */ }
+  }
+
+  /** A left/right text-wrapped image: pin it to that margin at the current flow
+   *  position and register a float column so the following paragraphs reflow beside
+   *  it (Word's wrapSquare), instead of being pushed below the picture. */
+  function placeWrapFloat(block) {
+    try {
+      const jpg = imageData.get(block.src);
+      if (!jpg) return;
+      const wPx = Math.min(block.width || jpg.w, contentWpx);
+      const hPx = block.height ? block.height : jpg.h * (wPx / jpg.w);
+      const hPt = hPx * PX_TO_PT;
+      need(hPt);                 // move to the next page if it can't fit here
+      const side = block.wrap === 'left' ? 'left' : 'right';
+      const xPx = side === 'left' ? marginPx : (marginPx + contentWpx - wPx);
+      const topY = y;            // image top sits at the current flow cursor
+      const bottomY = y - hPt;
+      const name = `Im${images.length}_${pages.length}`;
+      images.push({ name, bytes: jpg.bytes, w: jpg.w, h: jpg.h });
+      ops.push(`q ${round(wPx * PX_TO_PT)} 0 0 ${round(hPt)} ${round(xPx * PX_TO_PT)} ${round(bottomY)} cm /${name} Do Q`);
+      activeFloat = { side, wPx, topYpt: topY, bottomYpt: bottomY };
     } catch { /* skip bad image */ }
   }
 
@@ -1094,3 +1285,520 @@ function hexToRgb(hex) {
   return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255].map((n) => round(n));
 }
 function round(n) { return Math.round(n * 1000) / 1000; }
+
+/* ========================================================================== */
+/*  PPTX (PresentationML) — block model → editable slides                     */
+/* ========================================================================== */
+
+/**
+ * Document (block model) → PowerPoint .pptx.
+ *
+ * Each document PAGE becomes one slide of the SAME size (portrait A4 by default),
+ * so the deck looks like the document rather than a generic 16:9 template. Every
+ * element stays real and editable in PowerPoint / Google Slides / Keynote:
+ *   • paragraphs & headings → positioned text boxes (real runs, bold/italic/
+ *     underline/strike, colour, font, alignment) — never a flattened image;
+ *   • lists → bulleted / auto-numbered text boxes;
+ *   • tables → native DrawingML tables (column widths, row/column spans, per-cell
+ *     erased borders) — selectable, editable cells;
+ *   • images/charts/shapes → pictures at their flow (or dragged) position, SVG
+ *     figures rasterised to PNG first (PPTX can't embed SVG);
+ *   • running header/footer → text boxes on every slide, page-number fields
+ *     resolved to the real page number.
+ *
+ * Layout runs as an explicit pipeline so elements never overlap: (1) MEASURE the
+ * real height of every element (text/heading/list/table/image/chart/shape) with
+ * the SAME embedded-font metrics the PDF / page-image exporters use; (2) FLOW them
+ * top-down, moving each element below the previous one and starting a new slide
+ * when the next element won't fit; (3) a final COLLISION + BOUNDS pass pushes any
+ * still-overlapping element down and reflows it onto a new slide if it would spill
+ * past the bottom — the guarantee that holds even if a measurement was slightly
+ * off; (4) SERIALISE. Table row heights are estimated generously (a:tr@h is a
+ * MINIMUM PowerPoint can only grow) so the element after a table is never covered.
+ * PowerPoint re-wraps text inside each box with its own fonts; boxes use
+ * shrink-to-fit (`normAutofit`) as an extra guard. (A single element taller than a
+ * whole slide is left in place and allowed to overflow — it can't be split.)
+ *
+ * @param {object} doc block model (see model/documentModel.js)
+ * @param {{ zip?: (entries:Array, mime:string)=>(Blob|Promise<Blob>) }} [opts]
+ * @returns {Promise<Blob>} the .pptx package
+ */
+const EMU = (px) => Math.round((px || 0) * PX_TO_EMU);
+const A_MAIN = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const P_NS = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+
+/** Run → DrawingML run properties (font size in 1/100 pt, colour, face, styles). */
+function aRunPr(m) {
+  const sz = Math.max(100, Math.round(m.fontSize * PX_TO_PT * 100));
+  const face = esc(cleanFont(m.fontFamily));
+  return `<a:rPr lang="en-US" sz="${sz}"${m.bold ? ' b="1"' : ''}${m.italic ? ' i="1"' : ''}` +
+    `${m.underline ? ' u="sng"' : ''}${m.strike ? ' strike="sngStrike"' : ''} dirty="0">` +
+    `<a:solidFill><a:srgbClr val="${hex6(m.color)}"/></a:solidFill>` +
+    `<a:latin typeface="${face}"/><a:cs typeface="${face}"/></a:rPr>`;
+}
+
+function aRun(run) {
+  const m = marksOf(run);
+  // A header/footer field is substituted for its concrete number before this point;
+  // the fallback keeps a stray field visible rather than empty.
+  const text = run.field ? '1' : (run.text || '');
+  return `<a:r>${aRunPr(m)}<a:t xml:space="preserve">${esc(text)}</a:t></a:r>`;
+}
+
+/**
+ * Runs → one DrawingML paragraph. `align` maps to a:pPr/@algn; `bullet` is
+ * `'none'` (explicitly no bullet), `{ type:'bullet' }`, or
+ * `{ type:'number', startAt }` (auto-number, `startAt` on the first item of a box).
+ */
+function aPara(runs, { align = 'left', bullet = null } = {}) {
+  const algn = align === 'center' ? ' algn="ctr"' : align === 'right' ? ' algn="r"'
+    : align === 'justify' ? ' algn="just"' : ' algn="l"';
+  let attrs = algn;
+  let bu = '';
+  if (bullet === 'none') bu = '<a:buNone/>';
+  else if (bullet && bullet.type === 'bullet') {
+    attrs += ' marL="285750" indent="-285750"';
+    bu = '<a:buFont typeface="Arial"/><a:buChar char="•"/>';
+  } else if (bullet && bullet.type === 'number') {
+    attrs += ' marL="285750" indent="-285750"';
+    const start = bullet.startAt && bullet.startAt > 1 ? ` startAt="${bullet.startAt}"` : '';
+    bu = `<a:buFont typeface="+mj-lt"/><a:buAutoNum type="arabicPeriod"${start}/>`;
+  }
+  const body = (runs && runs.length ? runs : [{ text: '' }]).map(aRun).join('');
+  return `<a:p><a:pPr${attrs}>${bu}</a:pPr>${body}</a:p>`;
+}
+
+/** A positioned, editable text box shape (shrink-to-fit so it never overflows). */
+function pptxTextBox(id, xPx, yPx, wPx, hPx, parasXml, anchor = 't') {
+  return '<p:sp><p:nvSpPr>' +
+    `<p:cNvPr id="${id}" name="TextBox ${id}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>` +
+    `<p:spPr><a:xfrm><a:off x="${EMU(xPx)}" y="${EMU(yPx)}"/>` +
+    `<a:ext cx="${EMU(Math.max(wPx, 1))}" cy="${EMU(Math.max(hPx, 1))}"/></a:xfrm>` +
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>' +
+    `<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="${anchor}"><a:normAutofit/></a:bodyPr>` +
+    `<a:lstStyle/>${parasXml}</p:txBody></p:sp>`;
+}
+
+/** A picture shape referencing an embedded image relationship. */
+function pptxPicture(id, xPx, yPx, wPx, hPx, rId) {
+  return '<p:pic><p:nvPicPr>' +
+    `<p:cNvPr id="${id}" name="Picture ${id}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>` +
+    `<p:blipFill><a:blip r:embed="${rId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+    `<p:spPr><a:xfrm><a:off x="${EMU(xPx)}" y="${EMU(yPx)}"/><a:ext cx="${EMU(wPx)}" cy="${EMU(hPx)}"/></a:xfrm>` +
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>';
+}
+
+/** A table cell's <a:tcPr> — borders from the table weight + per-cell erased edges. */
+function pptxTcPr(cell, border) {
+  const hide = (cell && cell.hide) || '';
+  const sideLn = (side, ch) => {
+    if (border === 'none' || hide.includes(ch)) return `<a:ln${side}><a:noFill/></a:ln${side}>`;
+    const w = border === 'thick' ? 19050 : 9525;            // ~1.5pt / ~0.75pt
+    const col = border === 'thick' ? '5B6170' : '9AA1B7';
+    return `<a:ln${side} w="${w}"><a:solidFill><a:srgbClr val="${col}"/></a:solidFill></a:ln${side}>`;
+  };
+  return '<a:tcPr marL="57150" marR="57150" marT="22860" marB="22860" anchor="t">' +
+    sideLn('L', 'l') + sideLn('R', 'r') + sideLn('T', 't') + sideLn('B', 'b') + '</a:tcPr>';
+}
+
+/** A native DrawingML table (a:tbl) inside a positioned graphic frame. */
+function pptxTableFrame(id, xPx, yPx, wPx, hPx, block, grid, nrows, cols, colWpx, rowHpx) {
+  const gridXml = `<a:tblGrid>${colWpx.map((w) => `<a:gridCol w="${EMU(w)}"/>`).join('')}</a:tblGrid>`;
+  const border = block.border;
+  let trs = '';
+  for (let r = 0; r < nrows; r += 1) {
+    let tcs = '';
+    for (let c = 0; c < cols; c += 1) {
+      const m = grid[r][c];
+      if (!m) { tcs += '<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr/></a:tc>'; continue; }
+      if (m.r === r && m.c === c) {
+        const span = (m.cs > 1 ? ` gridSpan="${m.cs}"` : '') + (m.rs > 1 ? ` rowSpan="${m.rs}"` : '');
+        const runs = (m.cell && m.cell.runs && m.cell.runs.length) ? m.cell.runs : [{ text: '' }];
+        const body = `<a:txBody><a:bodyPr/><a:lstStyle/>${aPara(runs, { align: 'left', bullet: 'none' })}</a:txBody>`;
+        tcs += `<a:tc${span}>${body}${pptxTcPr(m.cell, border)}</a:tc>`;
+      } else {
+        // A covered position: horizontally merged (not the master's first column)
+        // and/or vertically merged (not its first row). Still emits a placeholder tc.
+        const mrg = (c > m.c ? ' hMerge="1"' : '') + (r > m.r ? ' vMerge="1"' : '');
+        tcs += `<a:tc${mrg}><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr/></a:tc>`;
+      }
+    }
+    trs += `<a:tr h="${EMU(rowHpx[r])}">${tcs}</a:tr>`;
+  }
+  const tbl = `<a:tbl><a:tblPr firstRow="0" bandRow="0"/>${gridXml}${trs}</a:tbl>`;
+  return '<p:graphicFrame><p:nvGraphicFramePr>' +
+    `<p:cNvPr id="${id}" name="Table ${id}"/>` +
+    '<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>' +
+    `<p:xfrm><a:off x="${EMU(xPx)}" y="${EMU(yPx)}"/><a:ext cx="${EMU(wPx)}" cy="${EMU(hPx)}"/></p:xfrm>` +
+    `<a:graphic><a:graphicData uri="${A_MAIN.replace('/main', '/table')}">${tbl}</a:graphicData></a:graphic></p:graphicFrame>`;
+}
+
+export async function blockModelToPptx(doc, { zip = zipBlob } = {}) {
+  const fonts = await loadPdfFonts();
+  const measure = (text, m) => glyphWidthPx(text, pickFont(fonts, m), m.fontSize);
+  const svgRaster = await rasterizeSvgImages(doc);
+
+  const pageWpx = doc.page?.width || 816;
+  const pageHpx = doc.page?.height || 1056;
+  const marginPx = doc.page?.margin || 72;
+  const contentWpx = Math.max(1, pageWpx - marginPx * 2);
+
+  // Approximate visual line count for a run sequence flowed into `maxWpx`, measured
+  // with the embedded-font metrics (same basis as the PDF export). Long unbreakable
+  // tokens count the rows they span. Drives box sizing + pagination only —
+  // PowerPoint does the real wrapping.
+  const wrapCount = (runs, maxWpx) => {
+    if (maxWpx <= 0) return 1;
+    const toks = [];
+    for (const run of runs || []) {
+      const m = marksOf(run);
+      for (const t of (run.text || '').split(/(\s+)/)) if (t !== '') toks.push({ text: t, marks: m });
+    }
+    if (!toks.length) return 1;
+    let lines = 1;
+    let lineW = 0;
+    for (const t of toks) {
+      const w = measure(t.text, t.marks);
+      if (w > maxWpx && t.text.trim()) {
+        if (lineW > 0) { lines += 1; lineW = 0; }
+        const pieces = Math.max(1, Math.ceil(w / maxWpx));
+        lines += pieces - 1;
+        lineW = Math.max(0, w - (pieces - 1) * maxWpx);
+        continue;
+      }
+      if (lineW + w > maxWpx && lineW > 0 && t.text.trim()) { lines += 1; lineW = w; }
+      else lineW += w;
+    }
+    return lines;
+  };
+  const runsMaxSize = (runs) => Math.max(...((runs && runs.length ? runs : [{}]).map((r) => marksOf(r).fontSize)), 12);
+
+  // Running header/footer reserve (mirrors the PDF exporter): the space beyond the
+  // page margin that the head/foot occupies, so body text never sits under it.
+  const headerCfg = normHf(doc.header);
+  const footerCfg = normHf(doc.footer);
+  const hfHeightPx = (blocks) => {
+    if (hfIsEmpty(blocks)) return 0;
+    let h = 0;
+    for (const b of blocks || []) {
+      const runs = b.runs || [];
+      h += wrapCount(runs, contentWpx) * runsMaxSize(runs) * ((b.style && b.style.lineHeight) || 1.4);
+    }
+    return h;
+  };
+  const reservePx = (cfg, idx) => {
+    const h = hfHeightPx(hfBlocks(cfg, hfKindFor(cfg, idx)));
+    return h ? Math.max(0, cfg.distance + h + HF_GAP - marginPx) : 0;
+  };
+  const contentTopPx = (idx) => marginPx + reservePx(headerCfg, idx);
+  const contentBottomPx = (idx) => pageHpx - marginPx - reservePx(footerCfg, idx);
+
+  // ------------------------------------------------------------------------
+  // 1) MEASURE — turn every block into a flow "item" that knows its own real
+  //    height (px) and how to render itself at a final (x, y). Nothing is placed
+  //    yet, so heights can be checked against each other before committing.
+  //    Each item: { x, w, h, spaceBefore, spaceAfter, render(id, y, ctx) }.
+  //    Floating (free-dragged) images bypass the flow — they keep their absolute
+  //    coordinates and are excluded from the collision pass by design.
+  // ------------------------------------------------------------------------
+  const LINE_PAD = 3;            // breathing room under a text box (px)
+  const IMG_GAP = 8;            // gap under an inline picture/table
+  const TABLE_INSET_X = 6;      // matches a:tcPr marL/marR (57150 EMU ≈ 6px)
+  const TABLE_INSET_Y = 3;      // ≈ a:tcPr marT/marB + PPT's own cell padding
+  const TABLE_LH = 1.45;        // generous cell line height so rows never grow past the estimate
+  const MIN_ROW = 22;
+
+  const items = [];
+  const floats = [];
+
+  const paraItem = (block) => {
+    const st = block.style || {};
+    const runs = (block.runs && block.runs.length) ? block.runs : [{ text: '', marks: {} }];
+    const indent = st.indentLeft || 0;
+    const x = marginPx + indent;
+    const w = Math.max(20, contentWpx - indent);
+    const lh = st.lineHeightPx || runsMaxSize(runs) * (st.lineHeight || 1.4);
+    const h = Math.max(lh, wrapCount(runs, w) * lh) + LINE_PAD;
+    return {
+      x, w, h, spaceBefore: st.spaceBefore || 0, spaceAfter: st.spaceAfter ?? 10,
+      render: (id, y) => pptxTextBox(id, x, y, w, h, aPara(runs, { align: st.align || 'left', bullet: 'none' })),
+    };
+  };
+
+  // Each list item is its own flow item, so pagination/collision can break BETWEEN
+  // items. Ordered items carry an explicit startAt (= their 1-based index) so the
+  // numbering stays correct even when the list is split across slides.
+  const listItems = (block) => {
+    const ordered = !!block.ordered;
+    const align = (block.style && block.style.align) || 'left';
+    const all = block.items || [];
+    return all.map((it, i) => {
+      const runs = (it.runs && it.runs.length) ? it.runs : [{ text: '' }];
+      const lh = runsMaxSize(runs) * 1.4;
+      const h = Math.max(lh, wrapCount(runs, contentWpx - 30) * lh) + LINE_PAD;
+      const bullet = ordered ? { type: 'number', startAt: i + 1 } : { type: 'bullet' };
+      return {
+        x: marginPx, w: contentWpx, h,
+        spaceBefore: 0, spaceAfter: i === all.length - 1 ? ((block.style && block.style.spaceAfter) ?? 6) : 0,
+        render: (id, y) => pptxTextBox(id, marginPx, y, contentWpx, h, aPara(runs, { align, bullet })),
+      };
+    });
+  };
+
+  const imageItem = (block) => {
+    const src = svgRaster.get(block.src) || block.src;
+    if (!src || /^data:image\/svg/i.test(src)) return;   // unembeddable → skip
+    let bytes;
+    try { bytes = dataURLToBytes(src); } catch { return; }
+    const ext = mimeExt(src);
+    let wPx = block.width || 480;
+    let hPx = block.height || Math.round(wPx * 0.66);
+    // A dragged (free) image keeps its absolute page coordinates and does not take
+    // part in the flow/collision pass (it is deliberately positioned by the user).
+    if (block.left != null && block.top != null) {
+      floats.push({ render: (id, ctx) => pptxPicture(id, block.left, block.top, wPx, hPx, ctx.addImage(bytes, ext)) });
+      return;
+    }
+    if (wPx > contentWpx) { hPx = Math.round(hPx * (contentWpx / wPx)); wPx = contentWpx; }
+    const align = (block.align === 'right' || block.align === 'center') ? block.align
+      : (block.wrap === 'right' ? 'right' : block.wrap === 'left' ? 'left' : 'left');
+    let x = marginPx;
+    if (align === 'right') x = marginPx + Math.max(0, contentWpx - wPx);
+    else if (align === 'center') x = marginPx + Math.max(0, (contentWpx - wPx) / 2);
+    items.push({
+      x, w: wPx, h: hPx, spaceBefore: 0, spaceAfter: IMG_GAP,
+      render: (id, y, ctx) => pptxPicture(id, x, y, wPx, hPx, ctx.addImage(bytes, ext)),
+    });
+  };
+
+  const tableItem = (block) => {
+    const masters = blockTableMasters(block);
+    const { grid, nrows, ncols } = TG.occupancy(masters);
+    const cols = Math.max(1, ncols);
+    if (!nrows) return;
+    const fracs = (Array.isArray(block.cols) && block.cols.length === cols) ? block.cols : null;
+    const colWpx = Array.from({ length: cols }, (_, i) => contentWpx * (fracs ? fracs[i] : 1 / cols));
+    // Row height = the tallest cell that starts (or spans) into it, measured at the
+    // cell's true inner width and with generous line height + insets so PowerPoint
+    // never needs to grow the row beyond this estimate (a:tr@h is a MINIMUM). This
+    // is what keeps the element after the table from being overlapped.
+    const rowHpx = new Array(nrows).fill(0);
+    for (const m of masters) {
+      const width = colWpx.slice(m.c, m.c + m.cs).reduce((a, b) => a + b, 0);
+      const runs = (m.cell && m.cell.runs) || [];
+      const innerW = Math.max(8, width - TABLE_INSET_X * 2);
+      const cellH = wrapCount(runs, innerW) * runsMaxSize(runs) * TABLE_LH + TABLE_INSET_Y * 2 + 2;
+      const per = cellH / m.rs;
+      for (let dr = 0; dr < m.rs; dr += 1) rowHpx[m.r + dr] = Math.max(rowHpx[m.r + dr], per);
+    }
+    for (let r = 0; r < nrows; r += 1) rowHpx[r] = Math.max(rowHpx[r], (block.rowH && block.rowH[r]) || 0, MIN_ROW);
+    const tableW = colWpx.reduce((a, b) => a + b, 0);
+    const h = rowHpx.reduce((a, b) => a + b, 0);
+    items.push({
+      x: marginPx, w: tableW, h, spaceBefore: 0, spaceAfter: IMG_GAP, atomic: true,
+      render: (id, y) => pptxTableFrame(id, marginPx, y, tableW, h, block, grid, nrows, cols, colWpx, rowHpx),
+    });
+  };
+
+  for (const block of (doc.blocks || [])) {
+    try {
+      if (block.type === 'image') imageItem(block);
+      else if (block.type === 'table') tableItem(block);
+      else if (block.type === 'list') items.push(...listItems(block));
+      else items.push(paraItem(block));
+    } catch { /* never let one malformed block abort the whole export */ }
+  }
+
+  // ------------------------------------------------------------------------
+  // 2) FLOW — pack items top-down into slides. An item that would cross the
+  //    bottom margin starts a new slide (unless it is the first on the slide, in
+  //    which case it stays and may overflow — only a single element taller than a
+  //    whole slide can do that).
+  // ------------------------------------------------------------------------
+  const COLLISION_GAP = 3;      // minimum vertical separation guaranteed between items
+  const rawSlides = [{ items: [], floats }];
+  {
+    let y = contentTopPx(0);
+    for (const it of items) {
+      let s = rawSlides[rawSlides.length - 1];
+      const idx = rawSlides.length - 1;
+      const spBefore = s.items.length ? (it.spaceBefore || 0) : 0;
+      let top = y + spBefore;
+      if (top + it.h > contentBottomPx(idx) && s.items.length) {
+        s = { items: [], floats: [] };
+        rawSlides.push(s);
+        top = contentTopPx(rawSlides.length - 1);
+      }
+      it._top = top;
+      s.items.push(it);
+      y = top + it.h + (it.spaceAfter || 0);
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // 3) COLLISION + BOUNDS PASS — the guarantee. Walk each slide top-to-bottom:
+  //    push any item that overlaps the one above it down; if that shoves it past
+  //    the usable bottom, move it (and everything after it) onto a fresh slide.
+  //    This holds even if a measurement was slightly off.
+  // ------------------------------------------------------------------------
+  for (let si = 0; si < rawSlides.length; si += 1) {
+    const s = rawSlides[si];
+    s.items.sort((a, b) => a._top - b._top);
+    const top = contentTopPx(si);
+    const bottom = contentBottomPx(si);
+    let prevBottom = top;
+    const overflow = [];
+    for (const it of s.items) {
+      if (overflow.length) { overflow.push(it); continue; }   // once we spill, all later items follow
+      if (it._top < prevBottom) it._top = prevBottom;          // remove overlap with the item above
+      if (it._top < top) it._top = top;                        // never start above the content area
+      // Doesn't fit and it's NOT the only/first item here → move it forward. A lone
+      // item taller than a whole slide is left in place (can't be split further).
+      if (it._top + it.h > bottom && prevBottom > top) { overflow.push(it); continue; }
+      prevBottom = it._top + it.h + COLLISION_GAP;
+    }
+    if (overflow.length) {
+      s.items = s.items.filter((it) => !overflow.includes(it));
+      let ny = contentTopPx(si + 1);
+      for (const it of overflow) { it._top = ny; ny += it.h + (it.spaceAfter || 0) + COLLISION_GAP; }
+      rawSlides.splice(si + 1, 0, { items: overflow, floats: [] });   // processed on the next iteration
+    }
+  }
+
+  // Final verification before export: with resolution done this should be silent;
+  // it only surfaces the unavoidable case of a single object taller than one slide.
+  for (let si = 0; si < rawSlides.length; si += 1) {
+    const s = rawSlides[si];
+    const bottom = contentBottomPx(si);
+    for (let i = 1; i < s.items.length; i += 1) {
+      if (s.items[i]._top < s.items[i - 1]._top + s.items[i - 1].h - 0.5) {
+        console.warn(`[pptx] residual overlap on slide ${si + 1}`);
+      }
+    }
+    for (const it of s.items) {
+      if (it._top + it.h > bottom + 0.5) console.warn(`[pptx] element taller than slide ${si + 1} (overflows)`);
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // 4) SERIALISE — assign shape ids, attach image media to the FINAL slide each
+  //    picture landed on, and stamp the running header/footer (page fields
+  //    resolved) on every slide now the true page count is known.
+  // ------------------------------------------------------------------------
+  const total = rawSlides.length;
+  let mediaSeq = 0;
+  const addHf = (slide, idx, part, cfg, nextId) => {
+    const blocks = hfBlocks(cfg, hfKindFor(cfg, idx));
+    if (hfIsEmpty(blocks)) return;
+    const h = hfHeightPx(blocks);
+    const topPx = part === 'header' ? cfg.distance : (pageHpx - cfg.distance - h);
+    const paras = blocks.map((b) => aPara(substFields(b.runs || [], idx + 1, total),
+      { align: (b.style && b.style.align) || 'left', bullet: 'none' })).join('');
+    slide.shapes.push(pptxTextBox(nextId(), marginPx, topPx, contentWpx, h, paras));
+  };
+
+  const finalSlides = rawSlides.map((s, si) => {
+    const out = { shapes: [], images: [] };
+    let idSeq = 1;                       // 1 is the slide's root group shape
+    const nextId = () => (idSeq += 1);
+    const ctx = {
+      addImage: (bytes, ext) => {
+        mediaSeq += 1;
+        const file = `image${mediaSeq}.${ext}`;
+        const rId = `rId${out.images.length + 2}`;   // rId1 is the slide layout
+        out.images.push({ file, bytes, rId });
+        return rId;
+      },
+    };
+    for (const f of (s.floats || [])) out.shapes.push(f.render(nextId(), ctx));
+    for (const it of s.items) out.shapes.push(it.render(nextId(), it._top, ctx));
+    addHf(out, si, 'header', headerCfg, nextId);
+    addHf(out, si, 'footer', footerCfg, nextId);
+    return out;
+  });
+
+  return packageBlockPptx(finalSlides, EMU(pageWpx), EMU(pageHpx), zip);
+}
+
+/** One slide part's XML from its accumulated shapes. */
+function pptxSlideXml(slide) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+    `<p:sld xmlns:a="${A_MAIN}" xmlns:r="${R_NS}" xmlns:p="${P_NS}">` +
+    '<p:cSld><p:spTree>' +
+    '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+    '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>' +
+    slide.shapes.join('') +
+    '</p:spTree></p:cSld><p:clrMapOvr><a:overrideClrMapping ' +
+    'bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" ' +
+    'accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr></p:sld>';
+}
+
+/** Assemble the OOXML package (scaffold + per-slide parts, rels and image media). */
+function packageBlockPptx(slides, cx, cy, zip) {
+  const xmlHead = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`;
+  const pkgRel = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  const ofRel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  const presentation = xmlHead +
+    `<p:presentation xmlns:a="${A_MAIN}" xmlns:r="${R_NS}" xmlns:p="${P_NS}">` +
+    '<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>' +
+    '<p:sldIdLst>' +
+    slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 2}"/>`).join('') +
+    '</p:sldIdLst>' +
+    `<p:sldSz cx="${cx}" cy="${cy}"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`;
+
+  const presRels = xmlHead +
+    `<Relationships xmlns="${pkgRel}">` +
+    `<Relationship Id="rId1" Type="${ofRel}/slideMaster" Target="slideMasters/slideMaster1.xml"/>` +
+    slides.map((_, i) => `<Relationship Id="rId${i + 2}" Type="${ofRel}/slide" Target="slides/slide${i + 1}.xml"/>`).join('') +
+    `<Relationship Id="rId${slides.length + 2}" Type="${ofRel}/theme" Target="theme/theme1.xml"/>` +
+    '</Relationships>';
+
+  // Image content-type Defaults for every extension actually embedded.
+  const exts = new Set();
+  for (const s of slides) for (const im of s.images) exts.add(im.file.split('.').pop().toLowerCase());
+  const imageDefaults = [...exts].map((e) =>
+    `<Default Extension="${e}" ContentType="image/${e === 'jpg' ? 'jpeg' : e}"/>`).join('');
+
+  const contentTypes = xmlHead +
+    `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    imageDefaults +
+    '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>' +
+    '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>' +
+    '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>' +
+    '<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>' +
+    slides.map((_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('') +
+    '</Types>';
+
+  const rootRels = xmlHead +
+    `<Relationships xmlns="${pkgRel}">` +
+    `<Relationship Id="rId1" Type="${ofRel}/officeDocument" Target="ppt/presentation.xml"/>` +
+    '</Relationships>';
+
+  const entries = [
+    { name: '[Content_Types].xml', data: contentTypes },
+    { name: '_rels/.rels', data: rootRels },
+    { name: 'ppt/presentation.xml', data: presentation },
+    { name: 'ppt/_rels/presentation.xml.rels', data: presRels },
+    { name: 'ppt/slideMasters/slideMaster1.xml', data: SLIDE_MASTER },
+    { name: 'ppt/slideMasters/_rels/slideMaster1.xml.rels', data: MASTER_RELS },
+    { name: 'ppt/slideLayouts/slideLayout1.xml', data: SLIDE_LAYOUT },
+    { name: 'ppt/slideLayouts/_rels/slideLayout1.xml.rels', data: LAYOUT_RELS },
+    { name: 'ppt/theme/theme1.xml', data: THEME },
+  ];
+
+  slides.forEach((slide, i) => {
+    entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: pptxSlideXml(slide) });
+    const rels = xmlHead + `<Relationships xmlns="${pkgRel}">` +
+      `<Relationship Id="rId1" Type="${ofRel}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>` +
+      slide.images.map((im) => `<Relationship Id="${im.rId}" Type="${ofRel}/image" Target="../media/${im.file}"/>`).join('') +
+      '</Relationships>';
+    entries.push({ name: `ppt/slides/_rels/slide${i + 1}.xml.rels`, data: rels });
+    for (const im of slide.images) entries.push({ name: `ppt/media/${im.file}`, data: im.bytes });
+  });
+
+  return zip(entries, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+}

@@ -28,10 +28,14 @@ export async function loadOrt() {
 
     ort.env.wasm.wasmPaths = '/wasm/ort/';
     ort.env.wasm.simd = !!caps.wasmSimd;
-    // Conservative during bring-up: single-thread, in-line (no proxy worker), so
-    // the first inference has the fewest moving parts. We scale up to
-    // caps.maxThreads + proxy once the engine is confirmed working in-browser.
-    ort.env.wasm.numThreads = 1;
+    // Multi-threaded WASM inference: use every core we're allowed (caps.maxThreads
+    // is all cores when cross-origin isolated → SharedArrayBuffer, else 1, so this
+    // is a no-op — never a regression — where threading isn't available). This is
+    // the WASM-fallback speed-up; on the WebGPU path inference runs on the GPU and
+    // the thread count is moot. `proxy` stays false: ORT already runs inside our
+    // layout worker (off the main thread), so a nested proxy worker would only add
+    // overhead. SIMD is left on where supported.
+    ort.env.wasm.numThreads = Math.max(1, caps.maxThreads || 1);
     ort.env.wasm.proxy = false;
     return ort;
   })();

@@ -30,6 +30,9 @@ export async function convertToWordAI(model, opts = {}) {
   report(0, 'Starting AI layout…');
   const worker = createWorker({ url: WORKER_URL });
   const aiPages = new Array(total).fill(null);
+  // Per-page table-region boxes (page coords), used below to drop any raster-
+  // recovered "image" that actually falls inside a rebuilt table (see filterImages).
+  const tableBoxes = new Array(total).fill(null).map(() => []);
 
   try {
     for (let i = 0; i < total; i += 1) {
@@ -44,6 +47,7 @@ export async function convertToWordAI(model, opts = {}) {
       // Sample each region's background colour from the raster so coloured bars /
       // banners (often white text on colour) are shaded in the rebuild.
       await sampleRegionColors(pg, regions);
+      for (const r of regions) if (r && r.type === 'table' && r.box) tableBoxes[i].push(r.box);
       // Rasterise complex-script (Devanagari etc.) runs into inline image crops so
       // they render correctly instead of scrambling as editable Unicode; Latin text
       // and values stay editable. Best-effort — falls back to the raw runs.
@@ -57,20 +61,63 @@ export async function convertToWordAI(model, opts = {}) {
   report(total, 'Building Word document…');
   // extraImages: baked-in pictures (signature/photo/QR/logo) recovered from the
   // page raster by the caller, merged into each page so aiBody places them inline
-  // in reading order alongside the rebuilt text and tables.
-  return modelToDocx(model, { mode: 'ai', name: opts.name, aiPages, extraImages: opts.extraImages });
+  // in reading order alongside the rebuilt text and tables. A table is rebuilt as a
+  // REAL <w:tbl> from the region's text, so any recovered "image" landing inside a
+  // detected table is a mis-recovered cell fill/shading — drop it so it can't float
+  // as a grey box over the editable table.
+  const extraImages = filterImages(opts.extraImages, tableBoxes);
+  // inlineImages: force every recovered picture to flow in reading order (used for
+  // the Document-editor handoff, whose flow layout can't hold absolute positions —
+  // a floated image would overlap the reflowed text). The downloadable Word keeps
+  // the default (wide figures inline, narrow side-images floated in place).
+  return modelToDocx(model, { mode: 'ai', name: opts.name, aiPages, extraImages, inlineImages: opts.inlineImages });
 }
 
-/** Median colour (hex, no #) of a raster rectangle, or '' when it's near-white.
- *  Median per channel is robust to the text pixels (a minority of the region). */
-function medianRegionHex(ctx, x, y, w, h) {
-  let data;
-  try { data = ctx.getImageData(x, y, w, h).data; } catch { return ''; }
+/**
+ * Drop raster-recovered images that fall inside a detected TABLE region: those are
+ * mis-recovered cell fills / shaded headers (a flat grey rectangle), and the table
+ * is already rebuilt as a real, editable `<w:tbl>`. Left in, they float as grey
+ * boxes with selection handles over the table (the exact bug reported). Real
+ * pictures (photo/logo/QR/signature) sit in figure regions or outside tables, so
+ * they are untouched. An image counts as "inside" when ≥55% of its area overlaps a
+ * table box — enough to catch a cell fill without dropping a photo that merely
+ * abuts a table edge.
+ * @param {Array<Array<{x,y,w,h}>>|null|undefined} extraImages per-page recovered images
+ * @param {Array<Array<{x,y,w,h}>>} tableBoxes per-page detected table region boxes
+ */
+function filterImages(extraImages, tableBoxes) {
+  if (!Array.isArray(extraImages)) return extraImages;
+  return extraImages.map((imgs, i) => {
+    const boxes = tableBoxes[i] || [];
+    if (!Array.isArray(imgs) || !boxes.length) return imgs;
+    return imgs.filter((im) => {
+      const area = Math.max(1, (im.w || 0) * (im.h || 0));
+      let covered = 0;
+      for (const b of boxes) covered += overlapArea(im, b);
+      return covered / area < 0.55;
+    });
+  });
+}
+
+/** Area of the axis-aligned intersection of two {x,y,w,h} rects (0 if disjoint). */
+function overlapArea(a, b) {
+  const x0 = Math.max(a.x || 0, b.x || 0);
+  const y0 = Math.max(a.y || 0, b.y || 0);
+  const x1 = Math.min((a.x || 0) + (a.w || 0), (b.x || 0) + (b.w || 0));
+  const y1 = Math.min((a.y || 0) + (a.h || 0), (b.y || 0) + (b.h || 0));
+  return (x1 > x0 && y1 > y0) ? (x1 - x0) * (y1 - y0) : 0;
+}
+
+/** Median colour (hex, no #) of a rectangle within the WHOLE-page pixel buffer, or
+ *  '' when it's near-white. Median per channel is robust to the text pixels (a
+ *  minority of the region). `data`/`W` are the full page's RGBA buffer + width, so
+ *  every region samples from ONE readback instead of a getImageData per region. */
+function medianRegionHex(data, W, x, y, w, h) {
   const rs = [], gs = [], bs = [];
   const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 2000))); // ~2k samples max
   for (let yy = 0; yy < h; yy += step) {
     for (let xx = 0; xx < w; xx += step) {
-      const i = (yy * w + xx) * 4;
+      const i = ((y + yy) * W + (x + xx)) * 4;
       if (data[i + 3] < 128) continue; // skip transparent
       rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]);
     }
@@ -101,6 +148,8 @@ async function sampleRegionColors(pg, regions) {
     const cvs = new OffscreenCanvas(bmp.width, bmp.height);
     const ctx = cvs.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
+    // One full-page readback shared by every region (was a getImageData per region).
+    const data = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
     const sx = bmp.width / (pg.w || bmp.width);
     const sy = bmp.height / (pg.h || bmp.height);
     for (const reg of regions) {
@@ -109,7 +158,7 @@ async function sampleRegionColors(pg, regions) {
       const y = Math.max(0, Math.round(reg.box.y * sy));
       const w = Math.min(bmp.width - x, Math.round(reg.box.w * sx));
       const h = Math.min(bmp.height - y, Math.round(reg.box.h * sy));
-      if (w > 1 && h > 1) reg.bg = medianRegionHex(ctx, x, y, w, h);
+      if (w > 1 && h > 1) reg.bg = medianRegionHex(data, bmp.width, x, y, w, h);
     }
   } catch { /* sampling is best-effort */ } finally {
     if (bmp && bmp.close) bmp.close();

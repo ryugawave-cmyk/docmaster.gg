@@ -112,6 +112,10 @@ function createApp() {
     });
   app.use('/models', assetStatic('models'));
   app.use('/wasm', assetStatic('wasm'));
+  // On-device OCR engine (self-hosted Tesseract.js v5 — see core/ai/ocrTesseract.js
+  // and scripts/vendor-ocr.mjs). Mounted here so its core .wasm gets the correct
+  // application/wasm MIME (streaming compile) instead of the generic static type.
+  app.use('/vendor/tesseract', assetStatic('vendor/tesseract'));
 
   // ----- Static assets -----------------------------------------------------
   app.use(
