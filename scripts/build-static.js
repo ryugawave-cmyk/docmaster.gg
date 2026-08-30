@@ -149,7 +149,8 @@ async function main() {
     if (oversized.length) {
       console.log('');
       console.log(`  ${oversized.length} file(s) exceed the 25 MiB asset limit and were NOT bundled.`);
-      console.log('  Upload these to R2 (see DEPLOY.md). r2-manifest.json lists them:');
+      console.log('  These are served from the GitHub Release (see worker/index.js RELEASE_BASE).');
+      console.log('  Upload them as assets on that Release. r2-manifest.json lists them:');
       for (const f of oversized) {
         console.log(`   - ${f.path}  (${(f.bytes / 1048576).toFixed(1)} MB)  from ${f.source}`);
       }

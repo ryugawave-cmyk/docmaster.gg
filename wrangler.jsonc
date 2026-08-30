@@ -19,17 +19,10 @@
     "directory": "dist",
     "binding": "ASSETS",
     "run_worker_first": true
-  },
+  }
 
-  // R2 — holds the oversized AI files that exceed the 25 MiB asset limit
-  // (the 59 MB ONNX layout model + the 26 MB ORT .wasm). The Worker serves
-  // /models/* and /wasm/* from here when they are not present as assets.
-  //
-  // LOCAL (wrangler dev): the bucket is simulated under .wrangler/state; load the
-  //   files with `wrangler r2 object put ... --local` (see DEPLOY.md).
-  // REMOTE (deploy): create the real bucket first, or `wrangler deploy` will fail:
-  //   `wrangler r2 bucket create docmaster-models`
-  "r2_buckets": [
-    { "binding": "MODELS_R2", "bucket_name": "docmaster-models" }
-  ]
+  // The oversized AI files (the 59 MB ONNX layout model + the 26 MB ORT .wasm)
+  // exceed Cloudflare's 25 MiB asset limit, so they are NOT bundled here. They
+  // are published on this repo's GitHub Release and the Worker proxies them
+  // same-origin (see RELEASE_BASE in worker/index.js). No R2, no bucket, no card.
 }

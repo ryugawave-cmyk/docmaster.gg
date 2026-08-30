@@ -5,8 +5,9 @@
  *   1. injects a fresh per-request CSP nonce into each HTML page,
  *   2. sets the same security headers the Express app used
  *      (strict CSP + COOP/COEP cross-origin isolation for threaded WASM),
- *   3. serves the oversized AI files (/models/*, /wasm/*) from R2 when they are
- *      not present as assets (they exceed Cloudflare's 25 MiB asset limit),
+ *   3. serves the oversized AI files (/models/*, /wasm/*) from this repo's GitHub
+ *      Release when they are not present as assets (they exceed Cloudflare's
+ *      25 MiB asset limit) — proxied same-origin and cached at the edge,
  *   4. reserves /api/ai/* for FUTURE cloud AI (e.g. a Claude proxy). The API
  *      key would live in a Worker secret — never in the client. Stubbed for now.
  *
@@ -46,8 +47,17 @@ function randomNonce() {
 
 const IMMUTABLE = 'public, max-age=2592000, immutable';
 
+// The two oversized AI files (the ONNX layout model + the large ORT .wasm) can't
+// ship as Cloudflare assets (25 MiB cap), so they're published as assets on this
+// repo's GitHub Release — free, no card, no size cap. The Worker proxies them
+// same-origin from here (see the /models,/wasm handler). Release assets are flat,
+// so a request's final path segment is the asset name. Bump the tag if you cut a
+// new Release with updated files.
+const RELEASE_BASE =
+  'https://github.com/ryugawave-cmyk/docmaster.gg/releases/download/models-v1/';
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -66,25 +76,30 @@ export default {
       );
     }
 
-    // ----- Large AI assets: assets first, then R2 ---------------------------
-    // Small files live in dist (assets); the oversized model + wasm live in R2.
+    // ----- Large AI assets: assets first, then the GitHub Release -----------
+    // Small files live in dist (assets); the oversized model + wasm are pulled
+    // from the GitHub Release and served same-origin, cached at the edge so
+    // GitHub is only ever hit on a cold cache. Same-origin keeps them clear of
+    // connect-src / COEP concerns — the client still just requests /models,/wasm.
     if (pathname.startsWith('/models/') || pathname.startsWith('/wasm/')) {
       const asset = await env.ASSETS.fetch(request);
       if (asset.status !== 404) return withAssetHeaders(asset, pathname);
 
-      if (env.MODELS_R2) {
-        const key = pathname.replace(/^\//, '');
-        const obj = await env.MODELS_R2.get(key);
-        if (obj) {
-          const headers = new Headers();
-          obj.writeHttpMetadata(headers);
-          headers.set('Cache-Control', IMMUTABLE);
-          setAssetContentType(headers, pathname);
-          securityHeaders(headers);
-          return new Response(obj.body, { headers });
-        }
-      }
-      return new Response('Not found', { status: 404 });
+      const cache = caches.default;
+      const hit = await cache.match(request);
+      if (hit) return hit;
+
+      const filename = pathname.split('/').pop();
+      const upstream = await fetch(RELEASE_BASE + filename, { redirect: 'follow' });
+      if (!upstream.ok) return new Response('Not found', { status: 404 });
+
+      const headers = new Headers();
+      headers.set('Cache-Control', IMMUTABLE);
+      setAssetContentType(headers, pathname);
+      securityHeaders(headers);
+      const res = new Response(upstream.body, { status: 200, headers });
+      ctx.waitUntil(cache.put(request, res.clone()));
+      return res;
     }
 
     // ----- Everything else: static assets -----------------------------------
