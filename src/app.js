@@ -56,7 +56,14 @@ function createApp() {
           //               'https://*.g.doubleclick.net', 'https://*.google.com'
           //   connectSrc: add 'https://pagead2.googlesyndication.com'
           // (Also review COOP/COEP below — ad iframes may need adjustment.)
-          scriptSrc: ["'self'", "'wasm-unsafe-eval'", (req, res) => `'nonce-${res.locals.nonce}'`],
+          // 'https://www.googletagmanager.com' serves the GA4 gtag.js tag
+          // (added globally in the page <head> via partials/analytics.ejs).
+          scriptSrc: [
+            "'self'",
+            "'wasm-unsafe-eval'",
+            'https://www.googletagmanager.com',
+            (req, res) => `'nonce-${res.locals.nonce}'`,
+          ],
           // PDF.js renders off the main thread in a module Web Worker served
           // locally from /vendor/pdfjs; allow same-origin (and blob: fallback).
           workerSrc: ["'self'", 'blob:'],
@@ -67,8 +74,24 @@ function createApp() {
           styleSrc: ["'self'", "'unsafe-inline'"],
           fontSrc: ["'self'"],
           // blob: is needed for previewing user-selected images in the workspace.
-          imgSrc: ["'self'", 'data:', 'blob:'],
-          connectSrc: ["'self'"],
+          // GA4 sends measurement pixels/beacons to Google Analytics domains.
+          imgSrc: [
+            "'self'",
+            'data:',
+            'blob:',
+            'https://www.googletagmanager.com',
+            'https://www.google-analytics.com',
+            'https://*.google-analytics.com',
+          ],
+          // GA4 posts events to the Analytics collect endpoints (incl. regional
+          // *.google-analytics.com / *.analytics.google.com hosts).
+          connectSrc: [
+            "'self'",
+            'https://www.googletagmanager.com',
+            'https://www.google-analytics.com',
+            'https://*.google-analytics.com',
+            'https://*.analytics.google.com',
+          ],
           objectSrc: ["'none'"],
           baseUri: ["'self'"],
           formAction: ["'self'"],

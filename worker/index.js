@@ -19,12 +19,15 @@
 function csp(nonce) {
   return [
     "default-src 'self'",
-    `script-src 'self' 'wasm-unsafe-eval' 'nonce-${nonce}'`,
+    // www.googletagmanager.com serves the GA4 gtag.js tag (partials/analytics.ejs).
+    `script-src 'self' 'wasm-unsafe-eval' https://www.googletagmanager.com 'nonce-${nonce}'`,
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
-    "img-src 'self' data: blob:",
-    "connect-src 'self'",
+    // GA4 measurement pixels/beacons go to the Google Analytics domains.
+    "img-src 'self' data: blob: https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com",
+    // GA4 posts events to the Analytics collect endpoints (incl. regional hosts).
+    "connect-src 'self' https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

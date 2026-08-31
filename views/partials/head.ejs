@@ -2,6 +2,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="theme-color" content="#6366f1" />
 
+<!-- Google Analytics 4 — loaded first in <head> on every page/route. -->
+<%- include('./analytics') %>
+
 <%
   const fullTitle = (typeof pageTitle !== 'undefined' && pageTitle)
     ? `${pageTitle} · ${site.name}`

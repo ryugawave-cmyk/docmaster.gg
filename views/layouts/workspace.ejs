@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f1020" />
 
+  <!-- Google Analytics 4 — loaded on the workspace SPA too (same tag, once). -->
+  <%- include('../partials/analytics') %>
+
   <title><%= pageTitle %> · <%= site.name %></title>
   <meta name="description" content="<%= metaDescription %>" />
   <meta name="robots" content="<%= (typeof robots !== 'undefined' && robots) ? robots : 'noindex, nofollow' %>" />
