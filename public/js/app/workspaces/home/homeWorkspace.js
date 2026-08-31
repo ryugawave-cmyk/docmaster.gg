@@ -96,7 +96,7 @@ function showComingSoon(action) {
       el('span', { class: 'home__soon-tag' }, 'Coming soon'),
       el('h3', { class: 'home__soon-title' }, action.title),
       el('p', { class: 'home__soon-desc' },
-        'This tool is in active development. Spreadsheets and data tables are coming to Alvion Office soon — stay tuned!'),
+        'This tool is in active development. Spreadsheets and data tables are coming to Advance Office Doc soon — stay tuned!'),
       el('button', { class: 'home__soon-btn', type: 'button', onClick: close }, 'Got it'),
     ]),
   ]);
@@ -153,7 +153,7 @@ export function createHomeWorkspace({ bus, store, services }) {
     root.replaceChildren(
       el('header', { class: 'home__brand' }, [
         el('span', { class: 'home__logo' }, [el('img', { class: 'home__logo-img', src: '/images/logo-mark.png', alt: '' })]),
-        el('span', { class: 'home__name' }, [el('b', {}, 'Alvion'), ' Office']),
+        el('span', { class: 'home__name' }, [el('b', {}, 'Advance'), ' Office Doc']),
       ]),
 
       el('div', { class: 'home__hero' }, [
@@ -203,7 +203,7 @@ export function createHomeWorkspace({ bus, store, services }) {
     mount,
     activate() {
       // Collapse all shared chrome — the home screen is a clean, distraction-free launcher.
-      store.setState({ homeMode: true, docName: 'Alvion Office', totalPages: 0, file: null, pageSize: null });
+      store.setState({ homeMode: true, docName: 'Advance Office Doc', totalPages: 0, file: null, pageSize: null });
     },
     deactivate() { store.setState({ homeMode: false }); },
     onActivate() {},

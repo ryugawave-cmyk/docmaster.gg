@@ -4,7 +4,7 @@
  * Long-form, human-written content for each `/tools/<slug>` overview page.
  *
  * Every entry is keyed by the tool slug used in `data/tools.js`. The copy is
- * intentionally specific and truthful: Alvion Office processes files entirely in
+ * intentionally specific and truthful: Advance Office Doc processes files entirely in
  * the browser, so the privacy notes describe that real behaviour rather than
  * server-side promises the app does not make.
  */
@@ -12,7 +12,7 @@
 // Shared, truthful privacy statement reused across tool pages. The app has no
 // upload endpoints — every transform runs client-side (see ARCHITECTURE.md).
 const CLIENT_PRIVACY =
-  'This tool runs entirely inside your web browser. Your file is opened locally and processed on your own device — it is never uploaded to Alvion Office servers, and we never see, store or share its contents. When you close or refresh the tab, the working copy in memory is gone.';
+  'This tool runs entirely inside your web browser. Your file is opened locally and processed on your own device — it is never uploaded to Advance Office Doc servers, and we never see, store or share its contents. When you close or refresh the tab, the working copy in memory is gone.';
 
 const toolPages = {
   'merge-pdf': {
@@ -146,7 +146,7 @@ const toolPages = {
       'Some complex layouts keep certain content as part of the page image rather than editable text.',
     ],
     faq: [
-      { q: 'Can I edit the existing text in a PDF?', a: 'Often, yes — Alvion Office extracts a text layer where possible so you can edit it. Content that is part of a scanned image behaves like a picture unless you run OCR.' },
+      { q: 'Can I edit the existing text in a PDF?', a: 'Often, yes — Advance Office Doc extracts a text layer where possible so you can edit it. Content that is part of a scanned image behaves like a picture unless you run OCR.' },
       { q: 'Can I add my signature or a logo?', a: 'Yes. Use the image tool to place a signature image or logo, or use the dedicated Sign PDF tool.' },
     ],
   },
@@ -244,7 +244,7 @@ const toolPages = {
     ],
     fileTypes: 'PDF files (.pdf); signature images (PNG with transparency work best).',
     limitations: [
-      'Alvion Office adds a visible signature to the document. It does not issue certificate-based digital signatures or act as a qualified e-signature authority.',
+      'Advance Office Doc adds a visible signature to the document. It does not issue certificate-based digital signatures or act as a qualified e-signature authority.',
       'Whether a signature is legally binding depends on your jurisdiction and the agreement involved.',
     ],
     faq: [
@@ -325,7 +325,7 @@ const toolPages = {
     lead: 'Convert PDF tables and documents into Excel spreadsheets you can keep working with.',
     intro: [
       'Excel & Spreadsheets focuses on getting your data into a spreadsheet format. Export documents and extracted tables to Excel (.xlsx) so you can sort, calculate and analyse them in your spreadsheet app of choice.',
-      'A dedicated in-browser spreadsheet editor is in active development. Today, Alvion Office covers the conversion and export side so you can move data out of PDFs and documents quickly.',
+      'A dedicated in-browser spreadsheet editor is in active development. Today, Advance Office Doc covers the conversion and export side so you can move data out of PDFs and documents quickly.',
     ],
     capabilities: [
       'Export documents and tables to Excel (.xlsx)',
@@ -350,7 +350,7 @@ const toolPages = {
       'Complex or irregular tables may need light cleanup after conversion.',
     ],
     faq: [
-      { q: 'Can I edit spreadsheets directly in Alvion Office?', a: 'Not yet — a browser-based spreadsheet editor is in development. Today you can export to Excel and edit in your spreadsheet app.' },
+      { q: 'Can I edit spreadsheets directly in Advance Office Doc?', a: 'Not yet — a browser-based spreadsheet editor is in development. Today you can export to Excel and edit in your spreadsheet app.' },
       { q: 'Will my table structure be preserved?', a: 'Well-structured tables convert cleanly. Very irregular layouts may need minor adjustments after export.' },
     ],
   },
@@ -358,7 +358,7 @@ const toolPages = {
   'ai-document-tools': {
     lead: 'Assistive document features that run on-device in your browser — no cloud, no API keys.',
     intro: [
-      'Alvion Office is built as a client-first application: where AI-assisted features are offered, they are designed to run on-device using in-browser models, not by sending your documents to an external AI service.',
+      'Advance Office Doc is built as a client-first application: where AI-assisted features are offered, they are designed to run on-device using in-browser models, not by sending your documents to an external AI service.',
       'This is a preview area. Because it runs locally, available capabilities and performance depend on your browser and device — but your documents are never uploaded to a cloud AI provider.',
     ],
     capabilities: [
@@ -384,7 +384,7 @@ const toolPages = {
       'On-device performance depends on your browser, hardware and available memory.',
     ],
     faq: [
-      { q: 'Do you send my documents to an AI company?', a: 'No. Alvion Office does not use cloud AI providers or API keys — assistive features are designed to run on-device in your browser.' },
+      { q: 'Do you send my documents to an AI company?', a: 'No. Advance Office Doc does not use cloud AI providers or API keys — assistive features are designed to run on-device in your browser.' },
       { q: 'Why are the AI features limited?', a: 'Running models on-device keeps your data private but is more constrained than a data-centre service. We expand capabilities as in-browser models improve.' },
     ],
   },

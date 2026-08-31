@@ -1240,7 +1240,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
         if (data.kind !== 'document' || !data.model) throw new Error('bad');
         loadDoc(data.model, file.name.replace(/\.dmdoc$/i, ''));
       } catch {
-        bus.emit('toast', 'That isn’t an Alvion Office document project.');
+        bus.emit('toast', 'That isn’t an Advance Office Doc document project.');
       }
     });
     inp.click();

@@ -74,9 +74,9 @@ export function createBlankEditorShell({ container, bus }) {
   /* ------------------------------- header ------------------------------- */
   const goHome = () => bus.emit('nav:command', { command: 'view', arg: 'home' });
   const header = el('header', { class: 'bpx-top' }, [
-    el('button', { class: 'bpx-brand', type: 'button', title: 'Alvion Office home', onClick: goHome }, [
+    el('button', { class: 'bpx-brand', type: 'button', title: 'Advance Office Doc home', onClick: goHome }, [
       el('span', { class: 'bpx-brand__mark' }, [el('img', { class: 'bpx-brand__img', src: '/images/logo-mark.png', alt: '' })]),
-      el('span', { class: 'bpx-brand__name' }, [el('b', {}, 'Alvion'), ' Office']),
+      el('span', { class: 'bpx-brand__name' }, [el('b', {}, 'Advance'), ' Office Doc']),
     ]),
     el('div', { class: 'bpx-tabs' }, [
       el('div', { class: 'bpx-tab is-active' }, [

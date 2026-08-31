@@ -1,5 +1,5 @@
 /**
- * Alvion Office — client-side interactions.
+ * Advance Office Doc — client-side interactions.
  * Progressive enhancement only: the site is fully usable without JS.
  */
 (function () {
@@ -86,7 +86,7 @@
       const email = get('email');
       const message = get('message');
 
-      const subject = '[Alvion Office] ' + reason;
+      const subject = '[Advance Office Doc] ' + reason;
       const body =
         'Name: ' + name + '\n' +
         'Email: ' + email + '\n' +

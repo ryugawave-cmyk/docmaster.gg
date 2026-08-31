@@ -23,10 +23,10 @@ const config = {
   },
 
   site: {
-    name: process.env.SITE_NAME || 'Alvion Office',
+    name: process.env.SITE_NAME || 'Advance Office Doc',
     tagline: 'Every document tool you need — in one place.',
     description:
-      'Alvion Office is a free, browser-based document toolkit to merge, split, compress, convert, edit and sign PDFs, create and edit documents, and build charts — all processed privately in your browser.',
+      'Advance Office Doc is a free, browser-based document toolkit to merge, split, compress, convert, edit and sign PDFs, create and edit documents, and build charts — all processed privately in your browser.',
     // Set SITE_URL to the production domain (e.g. https://alvionoffice.com) in
     // the environment. Falls back to localhost for local development.
     url: process.env.SITE_URL || 'http://localhost:3000',

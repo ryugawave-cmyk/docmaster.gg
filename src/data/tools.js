@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Single source of truth for the Alvion Office tool catalog (marketing surface).
+ * Single source of truth for the Advance Office Doc tool catalog (marketing surface).
  *
  * These entries power the landing-page grid, the tools overview and the footer.
  * Each has a content-rich overview page at `/tools/<slug>` (crawlable, with an

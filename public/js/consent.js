@@ -1,5 +1,5 @@
 /**
- * Alvion Office — cookie consent (Google Consent Mode v2 compatible).
+ * Advance Office Doc — cookie consent (Google Consent Mode v2 compatible).
  *
  * Design goals:
  *  - Non-blocking banner + accessible preferences modal.

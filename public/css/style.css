@@ -357,8 +357,8 @@ button {
   letter-spacing: -0.02em;
 }
 .brand-mark {
-  /* Alvion "A" logo (cropped from the brand artwork, white background) sits on a
-     white rounded tile so it reads on both the light header and dark home/footer. */
+  /* Advance Office Doc logo mark (white background) sits on a white rounded tile
+     so it reads on both the light header and dark home/footer. */
   display: grid;
   place-items: center;
   width: 40px;
