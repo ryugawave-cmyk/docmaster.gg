@@ -3,6 +3,12 @@
 const config = require('../config');
 const { getAllTools, workspaceHref, toolPageHref } = require('../data/tools');
 
+// A single build/deploy stamp appended to static asset URLs (?v=…). The static
+// build sets ASSET_VERSION (see scripts/build-static.js); in dev it changes each
+// server start. Because HTML is served no-store (always fresh) while CSS/JS get
+// an immutable long cache, bumping this on deploy is what busts the old cache.
+const ASSET_VERSION = process.env.ASSET_VERSION || String(Date.now());
+
 /**
  * Injects globally-available view data into `res.locals` for every request.
  *
@@ -20,6 +26,7 @@ module.exports = function locals(req, res, next) {
   res.locals.toolPageHref = toolPageHref;
   res.locals.currentPath = req.path;
   res.locals.currentYear = new Date().getFullYear();
+  res.locals.assetVersion = ASSET_VERSION;
 
   // Sensible per-page SEO defaults; individual pages can override these.
   res.locals.pageTitle = null;

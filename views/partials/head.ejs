@@ -44,14 +44,21 @@
 <link rel="icon" href="/images/logo-mark.png?v=2" type="image/png" sizes="40x40" />
 <link rel="apple-touch-icon" href="/images/logo-mark.png?v=2" />
 
+<!-- Preload the two above-the-fold faces (body = Inter 400, headings = Sora 700)
+     so the hero renders in-brand instead of flashing a fallback font. No ?v= —
+     these URLs must byte-match the src url() inside fonts.css or the browser
+     double-downloads; crossorigin is required (fonts fetch in CORS mode). -->
+<link rel="preload" href="/fonts/inter-400-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/sora-700-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+
 <!-- Fonts are self-hosted (public/css/fonts.css) — no cross-origin CDN, so the
      app can run under cross-origin isolation (COOP/COEP). -->
-<link rel="stylesheet" href="/css/fonts.css" />
+<link rel="stylesheet" href="/css/fonts.css?v=<%= assetVersion %>" />
 
 <!-- Styles -->
-<link rel="stylesheet" href="/css/style.css" />
-<link rel="stylesheet" href="/css/pages.css" />
-<link rel="stylesheet" href="/css/auth.css" />
+<link rel="stylesheet" href="/css/style.css?v=<%= assetVersion %>" />
+<link rel="stylesheet" href="/css/pages.css?v=<%= assetVersion %>" />
+<link rel="stylesheet" href="/css/auth.css?v=<%= assetVersion %>" />
 
 <!-- Structured data (nonce-tagged so the strict CSP allows it) -->
 <script type="application/ld+json" nonce="<%= nonce %>">

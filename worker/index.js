@@ -43,6 +43,10 @@ function securityHeaders(headers) {
   headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // The site is HTTPS-only; lock clients to it for a year.
+  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Deny powerful features the app never uses (Lighthouse best-practice).
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), browsing-topics=()');
 }
 
 function randomNonce() {
@@ -51,6 +55,30 @@ function randomNonce() {
 }
 
 const IMMUTABLE = 'public, max-age=2592000, immutable';
+const ONE_YEAR_IMMUTABLE = 'public, max-age=31536000, immutable';
+
+// Decide the Cache-Control for a static asset. Returns null to leave whatever
+// the assets binding already set (max-age=0, must-revalidate) — the safe default
+// for anything whose URL can't guarantee its content.
+function cacheControlFor(pathname, search) {
+  // Content-stable binaries: a given filename's bytes never change (font
+  // subsets, pinned pdf.js vendor build, media). Safe to cache hard, no ?v=.
+  if (
+    pathname.startsWith('/fonts/') ||
+    pathname.startsWith('/vendor/pdfjs/') ||
+    pathname.startsWith('/media/')
+  ) {
+    return ONE_YEAR_IMMUTABLE;
+  }
+  // Fingerprinted requests: the build stamps ?v=<buildId> onto CSS/JS/image
+  // URLs inside the always-fresh (no-store) HTML, so a new deploy changes the
+  // URL. That makes long immutable caching safe — old URLs are simply never
+  // requested again. Bare (un-stamped) URLs fall through to revalidate.
+  if (/[?&]v=/.test(search) && /\.(css|js|mjs|png|jpe?g|webp|gif|svg|ico)$/.test(pathname)) {
+    return ONE_YEAR_IMMUTABLE;
+  }
+  return null;
+}
 
 // The two oversized AI files (the ONNX layout model + the large ORT .wasm) can't
 // ship as Cloudflare assets (25 MiB cap), so they're published as assets on this
@@ -88,7 +116,7 @@ export default {
     // connect-src / COEP concerns — the client still just requests /models,/wasm.
     if (pathname.startsWith('/models/') || pathname.startsWith('/wasm/')) {
       const asset = await env.ASSETS.fetch(request);
-      if (asset.status !== 404) return withAssetHeaders(asset, pathname);
+      if (asset.status !== 404) return withAssetHeaders(asset, url);
 
       const cache = caches.default;
       const hit = await cache.match(request);
@@ -124,14 +152,16 @@ export default {
       return new Response(html, { status: res.status, headers });
     }
 
-    // Non-HTML assets: hardening headers, keep whatever cache assets set.
-    return withAssetHeaders(res, pathname);
+    // Non-HTML assets: hardening + cache headers (see cacheControlFor).
+    return withAssetHeaders(res, url);
   },
 };
 
-function withAssetHeaders(res, pathname) {
+function withAssetHeaders(res, url) {
   const headers = new Headers(res.headers);
-  setAssetContentType(headers, pathname);
+  setAssetContentType(headers, url.pathname);
+  const cc = cacheControlFor(url.pathname, url.search);
+  if (cc) headers.set('Cache-Control', cc);
   securityHeaders(headers);
   return new Response(res.body, { status: res.status, headers });
 }

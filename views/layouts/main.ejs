@@ -19,13 +19,13 @@
     <%- include('../partials/cookie-consent') %>
   <% } %>
 
-  <script src="/js/main.js" defer></script>
+  <script src="/js/main.js?v=<%= assetVersion %>" defer></script>
   <!-- Google sign-in: Supabase client (vendored same-origin) then our auth glue.
        `defer` preserves order so window.supabase exists before auth.js runs. -->
-  <script src="/vendor/supabase/supabase.js" defer></script>
-  <script src="/js/auth.js" defer></script>
+  <script src="/vendor/supabase/supabase.js?v=<%= assetVersion %>" defer></script>
+  <script src="/js/auth.js?v=<%= assetVersion %>" defer></script>
   <% if (features && features.cookieConsent) { %>
-    <script src="/js/consent.js" defer></script>
+    <script src="/js/consent.js?v=<%= assetVersion %>" defer></script>
   <% } %>
   <%- script %>
 </body>

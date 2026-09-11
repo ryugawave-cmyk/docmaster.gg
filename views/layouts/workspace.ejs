@@ -16,17 +16,20 @@
 
   <!-- Fonts are self-hosted (see public/css/fonts.css) so the app can enable
        cross-origin isolation (COOP/COEP) without a cross-origin subresource. -->
-  <link rel="stylesheet" href="/css/fonts.css" />
+  <link rel="stylesheet" href="/css/fonts.css?v=<%= assetVersion %>" />
 
-  <link rel="stylesheet" href="/css/workspace.css" />
-  <link rel="stylesheet" href="/css/app.css" />
-  <link rel="stylesheet" href="/css/blank-editor.css" />
+  <link rel="stylesheet" href="/css/workspace.css?v=<%= assetVersion %>" />
+  <link rel="stylesheet" href="/css/app.css?v=<%= assetVersion %>" />
+  <link rel="stylesheet" href="/css/blank-editor.css?v=<%= assetVersion %>" />
   <%- style %>
 </head>
 <body class="ws-body">
   <%- body %>
 
-  <script type="module" src="/js/app/index.js"></script>
+  <!-- Only the ESM entry carries ?v=; its relative imports resolve unversioned
+       and stay on revalidate caching, so a deploy can never serve a stale
+       module graph. -->
+  <script type="module" src="/js/app/index.js?v=<%= assetVersion %>"></script>
   <%- script %>
 </body>
 </html>

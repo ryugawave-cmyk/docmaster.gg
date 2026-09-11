@@ -25,6 +25,10 @@ const http = require('http');
 // replaces per request. Set BEFORE requiring the app/config.
 process.env.NODE_ENV = process.env.NODE_ENV || 'production';
 process.env.STATIC_BUILD = '1';
+// One stamp per build, appended to static asset URLs (?v=…) so a new deploy
+// busts the immutable long-cache the Worker sets on CSS/JS/images. Base36 of the
+// build time keeps it short. See src/middleware/locals.js + worker/index.js.
+process.env.ASSET_VERSION = process.env.ASSET_VERSION || Date.now().toString(36);
 
 const createApp = require('../src/app');
 const { getAllTools } = require('../src/data/tools');
