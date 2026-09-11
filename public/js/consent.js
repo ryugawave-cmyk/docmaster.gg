@@ -5,15 +5,13 @@
  *  - Non-blocking banner + accessible preferences modal.
  *  - Three clear choices: Accept all · Decline optional · Manage preferences.
  *  - Consent categories: necessary (always on), analytics, advertising.
- *  - Optional analytics/advertising technologies are NEVER loaded before consent.
- *    Gate them on AlvionConsent.hasConsent('advertising' | 'analytics').
- *  - Google Consent Mode v2: defaults are set to "denied" up front and updated
- *    when the visitor decides, so this is compatible with Google AdSense's
- *    consent requirements. No Google scripts are loaded here — this only records
- *    the consent signal so a future tag reads the correct state.
- *
- * Nothing here claims analytics or ads are currently used; they are optional and
- * off by default until explicitly allowed.
+ *  - Analytics (GA4) is granted by default so it measures every visitor; an
+ *    explicit "Decline optional" turns it off. Advertising technologies are
+ *    still NEVER loaded before consent — gate them on
+ *    AlvionConsent.hasConsent('advertising').
+ *  - Google Consent Mode v2: analytics defaults to "granted", advertising to
+ *    "denied", and both are updated when the visitor decides. No ad scripts are
+ *    loaded here — this only records the consent signal for the tags to read.
  */
 (function () {
   'use strict';
@@ -21,7 +19,7 @@
   var STORAGE_KEY = 'alvion:cookie-consent:v2';
   var CATEGORIES = ['analytics', 'advertising'];
 
-  /* ---- Google Consent Mode v2 bootstrap (defaults denied) --------------- */
+  /* ---- Google Consent Mode v2 bootstrap (analytics granted, ads denied) - */
   // Safe with no Google tag present: the calls just queue into dataLayer and are
   // read by Google tags if/when they are added later. This is the recommended
   // "consent default before update" pattern.
@@ -31,7 +29,10 @@
     ad_storage: 'denied',
     ad_user_data: 'denied',
     ad_personalization: 'denied',
-    analytics_storage: 'denied',
+    // Analytics is granted by default (matches partials/analytics.ejs) so GA4
+    // collects from every visitor. An explicit "Decline optional" still turns it
+    // off via the consent 'update' below. Advertising remains denied by default.
+    analytics_storage: 'granted',
     functionality_storage: 'granted',
     security_storage: 'granted',
     wait_for_update: 500,
@@ -98,7 +99,10 @@
     if (!modal) return;
     var stored = read();
     CATEGORIES.forEach(function (cat) {
-      if (toggles[cat]) toggles[cat].checked = !!(stored && stored[cat]);
+      if (!toggles[cat]) return;
+      // Reflect the stored choice; with no decision yet, analytics is on by
+      // default (advertising off) to match the Consent Mode defaults above.
+      toggles[cat].checked = stored ? !!stored[cat] : (cat === 'analytics');
     });
     lastFocus = document.activeElement;
     modal.hidden = false;

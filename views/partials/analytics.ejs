@@ -3,25 +3,25 @@
      partials/head.ejs, the workspace SPA via layouts/workspace.ejs), so it runs
      on every route exactly once. Measurement ID: G-DJMZ0SVV8P.
 
-     Consent Mode v2: this respects the site's existing cookie-consent signal
-     (see public/js/consent.js). The default is seeded from the site-wide choice
-     stored in localStorage so EVERY page — including the workspace, which has no
-     banner — honors the same decision. Until analytics is allowed, GA runs in
-     cookieless mode (no analytics cookies); consent.js flips it to granted the
-     moment the visitor accepts. All inline scripts carry the CSP nonce so the
-     strict Content-Security-Policy allows them without 'unsafe-inline'. -->
+     Consent Mode v2: analytics is GRANTED by default so GA collects from every
+     visitor on every page (including the workspace, which has no banner). A
+     visitor who explicitly declines via the cookie banner (consent.js) is still
+     honored — that stored choice turns analytics back off. Advertising stays
+     denied. All inline scripts carry the CSP nonce so the strict
+     Content-Security-Policy allows them without 'unsafe-inline'. -->
 <script nonce="<%= nonce %>">
   window.dataLayer = window.dataLayer || [];
   function gtag(){ dataLayer.push(arguments); }
 
-  // Consent Mode v2 default — seeded from any stored, site-wide cookie choice so
-  // the workspace (no banner) matches what the visitor chose on a public page.
+  // Consent Mode v2 default — analytics is GRANTED by default so GA collects
+  // from every visitor. A stored explicit "decline" still turns analytics off;
+  // advertising stays denied until (if ever) explicitly allowed.
   (function () {
-    var analyticsGranted = false, adGranted = false;
+    var analyticsGranted = true, adGranted = false;
     try {
       var s = JSON.parse(window.localStorage.getItem('alvion:cookie-consent:v2') || 'null');
-      if (s && s.v === 2) { analyticsGranted = !!s.analytics; adGranted = !!s.advertising; }
-    } catch (e) { /* storage blocked — stay denied */ }
+      if (s && s.v === 2) { analyticsGranted = s.analytics !== false; adGranted = !!s.advertising; }
+    } catch (e) { /* storage blocked — default to granted analytics */ }
     gtag('consent', 'default', {
       ad_storage: adGranted ? 'granted' : 'denied',
       ad_user_data: adGranted ? 'granted' : 'denied',
