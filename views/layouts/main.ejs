@@ -20,6 +20,10 @@
   <% } %>
 
   <script src="/js/main.js" defer></script>
+  <!-- Google sign-in: Supabase client (vendored same-origin) then our auth glue.
+       `defer` preserves order so window.supabase exists before auth.js runs. -->
+  <script src="/vendor/supabase/supabase.js" defer></script>
+  <script src="/js/auth.js" defer></script>
   <% if (features && features.cookieConsent) { %>
     <script src="/js/consent.js" defer></script>
   <% } %>

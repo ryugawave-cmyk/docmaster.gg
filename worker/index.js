@@ -24,10 +24,12 @@ function csp(nonce) {
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
-    // GA4 measurement pixels/beacons go to the Google Analytics domains.
-    "img-src 'self' data: blob: https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com",
-    // GA4 posts events to the Analytics collect endpoints (incl. regional hosts).
-    "connect-src 'self' https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com",
+    // GA4 measurement pixels/beacons go to the Google Analytics domains;
+    // lh3.googleusercontent.com serves the signed-in user's Google avatar.
+    "img-src 'self' data: blob: https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://lh3.googleusercontent.com",
+    // GA4 posts events to the Analytics collect endpoints (incl. regional hosts);
+    // the Supabase project host handles Google sign-in (auth) + data API calls.
+    "connect-src 'self' https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com https://synosgiafpeidtvjnnkk.supabase.co",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

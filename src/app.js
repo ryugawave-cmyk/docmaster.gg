@@ -75,6 +75,7 @@ function createApp() {
           fontSrc: ["'self'"],
           // blob: is needed for previewing user-selected images in the workspace.
           // GA4 sends measurement pixels/beacons to Google Analytics domains.
+          // lh3.googleusercontent.com serves the signed-in user's Google avatar.
           imgSrc: [
             "'self'",
             'data:',
@@ -82,15 +83,18 @@ function createApp() {
             'https://www.googletagmanager.com',
             'https://www.google-analytics.com',
             'https://*.google-analytics.com',
+            'https://lh3.googleusercontent.com',
           ],
           // GA4 posts events to the Analytics collect endpoints (incl. regional
-          // *.google-analytics.com / *.analytics.google.com hosts).
+          // *.google-analytics.com / *.analytics.google.com hosts). The Supabase
+          // project host handles Google sign-in (auth) + any data API calls.
           connectSrc: [
             "'self'",
             'https://www.googletagmanager.com',
             'https://www.google-analytics.com',
             'https://*.google-analytics.com',
             'https://*.analytics.google.com',
+            'https://synosgiafpeidtvjnnkk.supabase.co',
           ],
           objectSrc: ["'none'"],
           baseUri: ["'self'"],
