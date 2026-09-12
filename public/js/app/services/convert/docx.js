@@ -175,11 +175,23 @@ export async function positionedModelToDocx(doc) {
   // Re-import sidecar: the ORIGINAL positioned model (dormant boxes + original,
   // non-erased page rasters). Re-opening in the Document editor restores this
   // verbatim — a pixel-perfect round-trip (no font-substitution/overlap), instead of
-  // rebuilding lossily from the OOXML frames. Word/LibreOffice ignore this part.
+  // rebuilding lossily from the OOXML frames. GZIPPED to keep the file small (the
+  // model's base64 rasters lose their ~33% base64 overhead under DEFLATE). Falls back
+  // to no sidecar if compression is unavailable. Word/LibreOffice ignore this part.
   let extraParts = [];
-  try { extraParts = [{ name: 'docmaster/model.json', ext: 'json', data: JSON.stringify({ v: 1, model: doc }) }]; }
-  catch { extraParts = []; } // never let sidecar serialization fail the export
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, model: doc }));
+    extraParts = [{ name: 'docmaster/model.json.gz', ext: 'gz', data: await gzipBytes(bytes) }];
+  } catch { extraParts = []; } // never let the sidecar fail the export
   return packDocx(documentXml, media, rels, extraParts);
+}
+
+/** GZIP a byte array via the platform CompressionStream (browser + Node 18+). */
+async function gzipBytes(u8) {
+  const cs = new CompressionStream('gzip');
+  const w = cs.writable.getWriter();
+  w.write(u8); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
 }
 
 /** Paint each line's sampled `fill` over ONLY its glyph rows in the page raster, so
@@ -1042,7 +1054,10 @@ function packDocx(documentXml, media, rels, extraParts = []) {
   const hasImg = media.length > 0;
   const usesPng = media.some((m) => m.ext === 'png');
   const usesJpg = media.some((m) => m.ext === 'jpg');
-  const usesJson = extraParts.some((p) => p.ext === 'json');
+  // Content types for any extra-part extensions (our sidecar: gz / json).
+  const EXTRA_MIME = { json: 'application/json', gz: 'application/gzip' };
+  const extraDefaults = [...new Set(extraParts.map((p) => p.ext).filter((e) => EXTRA_MIME[e]))]
+    .map((e) => `<Default Extension="${e}" ContentType="${EXTRA_MIME[e]}"/>`).join('');
 
   const contentTypes =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
@@ -1051,7 +1066,7 @@ function packDocx(documentXml, media, rels, extraParts = []) {
     '<Default Extension="xml" ContentType="application/xml"/>' +
     (usesPng ? '<Default Extension="png" ContentType="image/png"/>' : '') +
     (usesJpg ? '<Default Extension="jpg" ContentType="image/jpeg"/>' : '') +
-    (usesJson ? '<Default Extension="json" ContentType="application/json"/>' : '') +
+    extraDefaults +
     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
     '</Types>';
 

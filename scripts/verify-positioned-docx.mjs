@@ -32,6 +32,7 @@ fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ type: 'module'
 
 const { blockModelToDocx } = await import(pathToFileURL(path.join(tmp, 'app/services/convert/blockExport.js')).href);
 const { inkBand } = await import(pathToFileURL(path.join(tmp, 'app/services/convert/docx.js')).href);
+const { mergeSidecar } = await import(pathToFileURL(path.join(tmp, 'app/services/convert/docxImport.js')).href);
 
 let failures = 0;
 const check = (name, cond) => { if (cond) console.log(`  ok  ${name}`); else { console.error(`FAIL  ${name}`); failures += 1; } };
@@ -84,7 +85,7 @@ globalThis.document = {
   check('frames anchor to the page', s.includes('w:vAnchor="page"') && s.includes('w:hAnchor="page"'));
   check('does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent'));
   check('erased raster → TRANSPARENT frames (no shd box)', !s.includes('<w:shd'));
-  check('embeds the re-import sidecar', s.includes('docmaster/model.json'));
+  check('embeds the gzipped re-import sidecar', s.includes('docmaster/model.json.gz'));
   check('keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
   check('one section per page (2 pages)', (s.match(/<w:sectPr>/g) || []).length === 2);
   check('did NOT flatten to a flow body', !s.includes('w:pgMar w:top="1440"'));
@@ -113,6 +114,41 @@ delete globalThis.Image;
   const band = inkBand(d, W, H, { x: 0, y: 0, w: 100, h: 40 }, 1, 255);
   check('inkBand found the text band', band && band.top <= 8 && band.top >= 6);
   check('inkBand is tight to the text (does NOT reach the rule at row 32)', band && band.top + band.h <= 24);
+}
+
+/* ---- D) mergeSidecar: keep the sidecar layout but adopt MS-Word text edits -------- */
+{
+  const mk = (texts) => ({
+    layout: 'positioned', page: { width: 600, height: 800, margin: 0 },
+    pages: [{ bg: 'data:orig', width: 600, height: 800 }],
+    blocks: texts.map((t, i) => ({
+      type: 'posbox', page: 0, frame: { x: 10, y: 10 + i * 20, w: 200, h: 18 }, fill: '#ffffff',
+      runs: [{ text: t, marks: { fontSize: 14 } }],
+    })),
+  });
+  const recon = (texts) => ({ layout: 'positioned', pages: [{ bg: 'data:erased' }],
+    blocks: texts.map((t) => ({ type: 'posbox', page: 0, frame: {}, fill: '', revealed: true, runs: [{ text: t, marks: {} }] })) });
+
+  // 1) Identical text (our own export) → sidecar verbatim: ORIGINAL raster + no revealed flag.
+  {
+    const d = mergeSidecar(mk(['Name', 'RAJAT']), recon(['Name', 'RAJAT']), 'x');
+    check('merge: identical → original raster kept', d.pages[0].bg === 'data:orig');
+    check('merge: identical → dormant (not revealed)', !d.blocks[0].revealed);
+    check('merge: identical → text unchanged', d.blocks[1].runs[0].text === 'RAJAT');
+  }
+  // 2) A line edited in Word → adopt that line's new text, keep the sidecar layout/raster.
+  {
+    const d = mergeSidecar(mk(['Name', 'RAJAT']), recon(['Name', 'RAJAT KUMAR']), 'x');
+    check('merge: edited line adopts Word text', d.blocks[1].runs[0].text === 'RAJAT KUMAR');
+    check('merge: unedited line untouched', d.blocks[0].runs[0].text === 'Name');
+    check('merge: still original raster + layout', d.pages[0].bg === 'data:orig' && d.blocks[1].frame.w === 200);
+  }
+  // 3) Line count changed in Word → sidecar layout is stale → use the reconstruction.
+  {
+    const r = recon(['Name', 'RAJAT', 'EXTRA LINE']);
+    const d = mergeSidecar(mk(['Name', 'RAJAT']), r, 'x');
+    check('merge: structure change → falls back to reconstruction', d === r);
+  }
 }
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }

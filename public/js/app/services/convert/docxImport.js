@@ -26,23 +26,6 @@ export async function docxToBlockModel(buf, title = 'Document') {
   const files = await unzip(new Uint8Array(buf));
   const dec = new TextDecoder();
 
-  // Re-import sidecar: our positioned Word export embeds the ORIGINAL document model
-  // (dormant boxes + original, non-erased page rasters). Restoring it verbatim is a
-  // pixel-perfect round-trip — no font-substitution overlap from rebuilding out of
-  // the OOXML frames. Preferred over reconstructPositioned when present.
-  const sidecar = files.get('docmaster/model.json');
-  if (sidecar) {
-    try {
-      const m = (JSON.parse(dec.decode(sidecar)) || {}).model;
-      if (m && m.layout === 'positioned' && Array.isArray(m.blocks)) {
-        const doc = createDocument({ title: m.title || title, source: 'docx', page: m.page, blocks: m.blocks, header: m.header, footer: m.footer });
-        doc.layout = 'positioned';
-        doc.pages = Array.isArray(m.pages) ? m.pages : [];
-        return doc;
-      }
-    } catch { /* corrupt sidecar → fall through to OOXML import */ }
-  }
-
   const documentXml = files.get('word/document.xml');
   if (!documentXml) return createDocument({ title, source: 'docx' });
 
@@ -61,12 +44,21 @@ export async function docxToBlockModel(buf, title = 'Document') {
 
   // Our own PDF→Doc "positioned" Word export (docx.js positionedModelToDocx) encodes
   // each line as a page-anchored text FRAME (w:framePr) over a full-page behindDoc
-  // raster. The generic flow importer below would stack those frames into a column
-  // and expose the text-erased raster (the broken re-import). Detect and rebuild the
-  // positioned model instead — the inverse of the exporter.
+  // raster, and embeds the ORIGINAL model as a sidecar for a lossless re-import. The
+  // generic flow importer below would stack the frames into a column and expose the
+  // text-erased raster (the broken re-import), so handle positioned docs specially:
+  //   • sidecar present  → restore it verbatim (pixel-perfect), but ADOPT the frames'
+  //     current text where it diverged (so edits made in MS Word are not lost to a
+  //     stale sidecar);
+  //   • no sidecar       → rebuild from the frames (older export / Word dropped it).
   if (isPositionedExport(body)) {
-    const positioned = reconstructPositioned(body, files, rels, title);
-    if (positioned) return positioned;
+    const reconstructed = reconstructPositioned(body, files, rels, title);
+    const sidecarModel = await readSidecarModel(files, dec);
+    if (sidecarModel) {
+      const merged = mergeSidecar(sidecarModel, reconstructed, title);
+      if (merged) return merged;
+    }
+    if (reconstructed) return reconstructed;
   }
 
   // Section properties → page size / margins (twips → px). Falls back to the model
@@ -174,6 +166,54 @@ function isPositionedExport(body) {
     if (a.getAttribute('behindDoc') === '1') return true;
   }
   return false;
+}
+
+/** Read the re-import sidecar (the positioned export's ORIGINAL model), gzip'd
+ *  (`docmaster/model.json.gz`) or, for older exports, plain (`docmaster/model.json`).
+ *  Returns the positioned model, or null when absent/corrupt. */
+async function readSidecarModel(files, dec) {
+  let bytes = files.get('docmaster/model.json.gz');
+  if (bytes) { try { bytes = await gunzip(bytes); } catch { return null; } }
+  else bytes = files.get('docmaster/model.json');
+  if (!bytes) return null;
+  try {
+    const m = (JSON.parse(dec.decode(bytes)) || {}).model;
+    return (m && m.layout === 'positioned' && Array.isArray(m.blocks)) ? m : null;
+  } catch { return null; }
+}
+
+/** GUNZIP a byte array via the platform DecompressionStream (browser + Node 18+). */
+async function gunzip(u8) {
+  const ds = new DecompressionStream('gzip');
+  const w = ds.writable.getWriter();
+  w.write(u8); w.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+/**
+ * Build a positioned Document from the sidecar model, keeping it honest about edits
+ * made in MS Word. The sidecar carries the ORIGINAL text; the OOXML `w:framePr` frames
+ * carry whatever the file currently says. When they diverge (a Word edit), adopt the
+ * frames' runs onto the matching sidecar boxes — same exact layout/raster, but the
+ * current text. If the box counts differ (lines added/removed in Word), the sidecar's
+ * layout is stale, so fall back to the frame reconstruction instead.
+ */
+export function mergeSidecar(m, reconstructed, title) {
+  const mBoxes = (m.blocks || []).filter((b) => b && b.type === 'posbox');
+  const rBoxes = reconstructed ? (reconstructed.blocks || []).filter((b) => b && b.type === 'posbox') : [];
+  if (rBoxes.length) {
+    if (rBoxes.length !== mBoxes.length) return reconstructed; // structure changed in Word
+    const txt = (b) => (b.runs || []).map((r) => r.text || '').join('');
+    for (let i = 0; i < mBoxes.length; i += 1) {
+      if (txt(mBoxes[i]) !== txt(rBoxes[i]) && rBoxes[i].runs && rBoxes[i].runs.length) {
+        mBoxes[i].runs = rBoxes[i].runs; // adopt the Word-edited line onto the sidecar box
+      }
+    }
+  }
+  const doc = createDocument({ title: m.title || title, source: 'docx', page: m.page, blocks: m.blocks, header: m.header, footer: m.footer });
+  doc.layout = 'positioned';
+  doc.pages = Array.isArray(m.pages) ? m.pages : [];
+  return doc;
 }
 
 let posSeq = 0;
