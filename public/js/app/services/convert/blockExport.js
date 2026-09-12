@@ -17,6 +17,7 @@ import * as TG from '../../model/tableGrid.js';
 import { parseTtf } from './ttf.js';
 import { rowsToXlsxBlob } from './xlsx.js';
 import { SLIDE_MASTER, MASTER_RELS, SLIDE_LAYOUT, LAYOUT_RELS, THEME } from './pptx.js';
+import { positionedModelToDocx } from './docx.js';
 
 /**
  * A table block stores only master cells per row (covered positions omitted,
@@ -251,6 +252,10 @@ const PIC_NS = 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/pict
  *   default keeps the normal Word export byte-for-byte unchanged.
  */
 export async function blockModelToDocx(doc, { zip = zipBlob } = {}) {
+  // A positioned (exact-layout) document — built by PDF→Doc "Transfer to Doc" — must
+  // keep its 2-D page layout, not be flattened into a stacked column. Hand it to the
+  // exact-layout Word exporter (full-page raster + one editable text box per line).
+  if (doc && doc.layout === 'positioned') return positionedModelToDocx(doc);
   const media = [];   // { name, bytes }
   const rels = [];    // { id, target } (image relationships)
   let relSeq = 100;

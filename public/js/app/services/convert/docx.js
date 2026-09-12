@@ -82,6 +82,105 @@ export function modelToDocx(model, opts = {}) {
   return packDocx(documentXml, media, rels);
 }
 
+/**
+ * Export a DOCUMENT-editor POSITIONED (exact-layout) model — the one the PDF→Doc
+ * "Transfer to Doc" builds (services/convert/positionedImport.js) — to a .docx that
+ * looks like the original page instead of a flat, stacked column.
+ *
+ * The model is different from the PDF-editor content model: `doc.layout==='positioned'`,
+ * `doc.pages=[{bg,width,height}]` (per-page raster) and `doc.blocks` are `posbox`
+ * blocks ({page, frame:{x,y,w,h}, style, fill, runs:[{text,marks}]}) — already ONE
+ * box per line. So, exactly like `absoluteBody`, each page is a full-page raster
+ * picture (all the borders/shading/seals/photo) with every line laid on top as a
+ * page-anchored, editable text box FILLED with its sampled `fill` (masking the glyph
+ * baked into the raster). Same look as the on-screen editor; text stays editable.
+ */
+export function positionedModelToDocx(doc) {
+  const pages = doc.pages || [];
+  const media = [];
+  const rels = [];
+  const addImage = (src) => {
+    const bytes = dataURLToBytes(src);
+    const ext = /^data:image\/png/i.test(src) ? 'png' : 'jpg';
+    const idx = media.length + 1;
+    const name = `image${idx}.${ext}`;
+    media.push({ name, bytes, ext });
+    const id = `rId${100 + idx}`;
+    rels.push({ id, target: `media/${name}` });
+    return id;
+  };
+
+  const boxesByPage = new Map();
+  for (const b of doc.blocks || []) {
+    if (!b || b.type !== 'posbox') continue;
+    const pi = b.page || 0;
+    if (!boxesByPage.has(pi)) boxesByPage.set(pi, []);
+    boxesByPage.get(pi).push(b);
+  }
+
+  const parts = [];
+  let z = 1;
+  const fallbackW = (doc.page && doc.page.width) || 794;
+  const fallbackH = (doc.page && doc.page.height) || 1123;
+
+  const list = pages.length ? pages : [{ width: fallbackW, height: fallbackH }];
+  list.forEach((pg, pi) => {
+    const w = pg.width || fallbackW;
+    const h = pg.height || fallbackH;
+    const anchors = [];
+    if (pg.bg) {
+      const bgId = addImage(pg.bg);
+      anchors.push(anchor(0, 0, w, h, z++, pictureGraphic(w, h, bgId, z), true));
+    }
+    for (const box of (boxesByPage.get(pi) || [])) {
+      const seg = posboxToSeg(box);
+      if (!seg.parts.length) continue;
+      const f = box.frame || {};
+      anchors.push(textboxAnchor(f.x || 0, f.y || 0, f.w || 0, f.h || 0, z++, seg));
+    }
+    const sectPr = `<w:sectPr><w:pgSz w:w="${TW(w)}" w:h="${TW(h)}"/>`
+      + '<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>';
+    const run = anchors.length ? `<w:r>${anchors.join('')}</w:r>` : '<w:r><w:t/></w:r>';
+    if (pi < list.length - 1) {
+      parts.push(`<w:p>${run}</w:p>`);
+      parts.push(`<w:p><w:pPr>${sectPr}</w:pPr></w:p>`); // ends section → page break
+    } else {
+      parts.push(`<w:p>${run}</w:p>`);
+      parts.push(sectPr);
+    }
+  });
+
+  const documentXml =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+    `<w:document ${DOC_NS}><w:body>${parts.join('')}</w:body></w:document>`;
+  return packDocx(documentXml, media, rels);
+}
+
+/** Map a document-model `posbox` block → the `seg` shape textboxAnchor expects
+ *  ({bg, parts:[{run,space}]}). A posbox is already one line, and each run's text
+ *  carries its own leading space, so `space` is always false. */
+function posboxToSeg(box) {
+  const align = (box.style && box.style.align) || 'left';
+  const parts = (box.runs || [])
+    .filter((r) => r && r.text != null && String(r.text).length)
+    .map((r) => {
+      const m = r.marks || {};
+      return {
+        run: {
+          text: r.text,
+          fontSize: m.fontSize || 14,
+          bold: !!m.bold,
+          italic: !!m.italic,
+          color: normHex(m.color) || '111111',
+          fontFamily: m.fontFamily || 'Arial',
+          align,
+        },
+        space: false,
+      };
+    });
+  return { bg: normHex(box.fill) || '', parts };
+}
+
 /* --------------------------- editable / hybrid --------------------------- */
 
 function runProps({ bold, italic, size, color, font }) {
