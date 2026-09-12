@@ -182,12 +182,16 @@ export async function positionedModelToDocx(doc) {
   return packDocx(documentXml, media, rels, extraParts);
 }
 
-/** Paint each line's sampled `fill` over its glyphs in the page raster, so the export
- *  overlay frames can be transparent (no visible box, no doubling). Returns an array
- *  of cleaned data-URLs (one per page, null where nothing could be cleaned) or null
- *  when there's no canvas (Node) — caller then keeps the opaque-mask fallback. The
- *  frame hugs its line (positionedImport `fs*1.15`), so a fill rect can't reach the
- *  cell borders/rules between lines. */
+/** Paint each line's sampled `fill` over ONLY its glyph rows in the page raster, so
+ *  the export's overlay frames can be transparent (no visible box, no doubling) while
+ *  the table grid lines survive. Returns an array of cleaned data-URLs (one per page,
+ *  null where nothing could be cleaned) or null when there's no canvas (Node) — caller
+ *  then keeps the opaque-mask fallback.
+ *
+ *  Erasing the FULL frame rectangle whited out the horizontal cell rules sitting just
+ *  above/below the text (the "faint/broken borders" report). Instead, detect the tight
+ *  band of rows that actually contain glyph ink and erase only that — the rules, which
+ *  live in the padding rows outside the ink band, stay intact. */
 async function erasePositionedText(pages, boxesByPage) {
   if (typeof document === 'undefined' || typeof Image === 'undefined') return null;
   const out = [];
@@ -204,19 +208,56 @@ async function erasePositionedText(pages, boxesByPage) {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0);
       const scale = W / (pg.width || W);
+      const data = ctx.getImageData(0, 0, W, H).data;
       for (const box of boxes) {
         const fill = normHex(box.fill);
         if (!fill) continue;
         const f = box.frame || {};
+        const x = Math.round((f.x || 0) * scale);
+        const w = Math.round((f.w || 0) * scale);
+        const band = inkBand(data, W, H, f, scale, hexLuma(fill));
         ctx.fillStyle = `#${fill}`;
-        ctx.fillRect(Math.round((f.x || 0) * scale), Math.round((f.y || 0) * scale),
-          Math.round((f.w || 0) * scale), Math.round((f.h || 0) * scale));
+        if (band) ctx.fillRect(x, band.top, w, band.h);         // glyph rows only → keep the rules
+        else ctx.fillRect(x, Math.round((f.y || 0) * scale), w, Math.round((f.h || 0) * scale)); // no ink found → full frame
       }
       out[pi] = canvas.toDataURL('image/jpeg', 0.92);
       any = true;
     } catch { out[pi] = null; }
   }
   return any ? out : null;
+}
+
+/** Luminance (0..255) of a 6-hex colour. */
+function hexLuma(hex) {
+  const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** The tight vertical band (raster px) of the TALLEST contiguous run of glyph-ink rows
+ *  inside a frame (a row is ink when >=3% of the width differs from the box's
+ *  background), padded 1px for anti-aliasing. Using the tallest contiguous run (not
+ *  the first..last ink row) means a thin cell rule sitting a few px above/below the
+ *  text — a separate short run — is NOT swept into the band, so the eraser spares it.
+ *  null when the frame has no ink. */
+export function inkBand(data, W, H, f, scale, bgLum) {
+  const x0 = Math.max(0, Math.round(f.x * scale)), y0 = Math.max(0, Math.round(f.y * scale));
+  const x1 = Math.min(W, Math.round((f.x + f.w) * scale)), y1 = Math.min(H, Math.round((f.y + f.h) * scale));
+  const wpx = x1 - x0;
+  if (wpx < 2 || y1 - y0 < 2) return null;
+  const lum = (x, y) => { const i = (y * W + x) * 4; return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; };
+  const minInk = Math.max(2, Math.round(wpx * 0.03));
+  let bestTop = -1, bestLen = 0, curStart = -1;
+  for (let y = y0; y < y1; y += 1) {
+    let n = 0;
+    for (let x = x0; x < x1; x += 1) if (Math.abs(lum(x, y) - bgLum) > 60) { n += 1; if (n >= minInk) break; }
+    if (n >= minInk) {
+      if (curStart < 0) curStart = y;
+      if (y - curStart + 1 > bestLen) { bestLen = y - curStart + 1; bestTop = curStart; }
+    } else curStart = -1;
+  }
+  if (bestLen <= 0) return null;
+  const top = Math.max(y0, bestTop - 1), bot = Math.min(y1 - 1, bestTop + bestLen - 1 + 1);
+  return { top, h: bot - top + 1 };
 }
 
 function loadImage(src) {

@@ -31,6 +31,7 @@ fs.cpSync(path.join(ROOT, 'public/js/app'), path.join(tmp, 'app'), { recursive: 
 fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ type: 'module' }));
 
 const { blockModelToDocx } = await import(pathToFileURL(path.join(tmp, 'app/services/convert/blockExport.js')).href);
+const { inkBand } = await import(pathToFileURL(path.join(tmp, 'app/services/convert/docx.js')).href);
 
 let failures = 0;
 const check = (name, cond) => { if (cond) console.log(`  ok  ${name}`); else { console.error(`FAIL  ${name}`); failures += 1; } };
@@ -62,11 +63,16 @@ async function xmlOf(doc) {
 /* ---- A) BROWSER path: stub canvas/Image so the raster is erased → transparent ---- */
 globalThis.Image = class { set src(_v) { this.naturalWidth = 794; this.naturalHeight = 1123; queueMicrotask(() => this.onload && this.onload()); } };
 globalThis.document = {
-  createElement: () => ({
-    width: 0, height: 0,
-    getContext: () => ({ fillStyle: '', drawImage() {}, fillRect() {} }),
-    toDataURL: () => JPG, // the "erased" page raster
-  }),
+  createElement: () => {
+    const c = { width: 0, height: 0, toDataURL: () => JPG };
+    c.getContext = () => ({
+      fillStyle: '', drawImage() {}, fillRect() {},
+      // all-white pixels → inkBand finds no ink → eraser no-ops, still produces a
+      // cleaned raster (toDataURL) so the transparent-frame path runs.
+      getImageData: () => ({ data: new Uint8ClampedArray(Math.max(4, c.width * c.height * 4)).fill(255) }),
+    });
+    return c;
+  },
 };
 {
   const { buf, s, type } = await xmlOf(makeDoc());
@@ -93,6 +99,20 @@ delete globalThis.Image;
   check('fallback masks with opaque shd fill', s.includes('w:fill="ffffff"') && s.includes('w:fill="eeeeee"'));
   check('fallback keeps the original raster', s.includes('word/media/image1'));
   check('fallback did NOT flatten to a flow body', !s.includes('w:pgMar w:top="1440"'));
+}
+
+/* ---- C) inkBand: erase covers glyph rows but SPARES a grid rule below them ------- */
+{
+  // 100×40 region (scale 1): text ink on rows 8..20 (50% width), a full-width grid
+  // rule on row 32. The eraser must cover the text band but not reach row 32.
+  const W = 100, H = 40;
+  const d = new Uint8ClampedArray(W * H * 4); d.fill(255);
+  const ink = (y0, y1, xe) => { for (let y = y0; y < y1; y += 1) for (let x = 2; x < xe; x += 1) { const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = 0; } };
+  ink(8, 21, 52);   // text band (rows 8..20)
+  ink(32, 33, 98);  // horizontal rule (row 32), full width
+  const band = inkBand(d, W, H, { x: 0, y: 0, w: 100, h: 40 }, 1, 255);
+  check('inkBand found the text band', band && band.top <= 8 && band.top >= 6);
+  check('inkBand is tight to the text (does NOT reach the rule at row 32)', band && band.top + band.h <= 24);
 }
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
