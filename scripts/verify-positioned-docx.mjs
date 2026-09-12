@@ -78,6 +78,7 @@ globalThis.document = {
   check('frames anchor to the page', s.includes('w:vAnchor="page"') && s.includes('w:hAnchor="page"'));
   check('does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent'));
   check('erased raster → TRANSPARENT frames (no shd box)', !s.includes('<w:shd'));
+  check('embeds the re-import sidecar', s.includes('docmaster/model.json'));
   check('keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
   check('one section per page (2 pages)', (s.match(/<w:sectPr>/g) || []).length === 2);
   check('did NOT flatten to a flow body', !s.includes('w:pgMar w:top="1440"'));

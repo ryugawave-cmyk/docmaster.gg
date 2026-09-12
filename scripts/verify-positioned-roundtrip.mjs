@@ -1,11 +1,12 @@
 /**
  * Round-trip check (headless Edge) — positioned Word export → re-import.
  *
- * Transfer-to-Doc builds a positioned model; Quick Export writes a .docx; re-opening
- * that .docx in the Document editor must come back POSITIONED (page raster + posbox
- * lines), not flattened into a stacked column. This drives the REAL browser modules
- * (blockModelToDocx + docxToBlockModel) in Edge, since both need DOMParser / canvas /
- * DecompressionStream that Node lacks.
+ * Transfer-to-Doc builds a positioned model; Quick Export writes a .docx (with a
+ * re-import JSON sidecar of the ORIGINAL model); re-opening that .docx in the
+ * Document editor must come back POSITIONED and PIXEL-IDENTICAL to the original
+ * (original raster + dormant boxes + exact frames/fills), not flattened or rebuilt
+ * lossily. This drives the REAL browser modules (blockModelToDocx + docxToBlockModel)
+ * in Edge, since both need DOMParser / canvas / DecompressionStream that Node lacks.
  *
  * Needs Microsoft Edge; uses a throwaway user-data dir to dodge the running-Edge
  * singleton. Best-effort: prints SKIPPED (exit 0) if Edge can't launch.
@@ -52,11 +53,11 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><body><script type="module"
       layout: re.layout,
       pageCount: (re.pages||[]).length,
       pagesHaveBg: (re.pages||[]).every(p => !!p.bg),
+      bgIsOriginal: (re.pages||[]).every(p => p.bg === '${PNG}'), // sidecar → original raster verbatim
       boxCount: boxes.length,
-      allRevealed: boxes.every(b => b.revealed === true),
-      allTransparent: boxes.every(b => !b.fill),
       texts: boxes.map(b => (b.runs||[]).map(r=>r.text).join('')),
       pageOf: boxes.map(b => b.page),
+      fills: boxes.map(b => b.fill),
       firstFrame: boxes[0] && boxes[0].frame,
       firstBold: !!(boxes[0] && boxes[0].runs[0].marks.bold),
     };
@@ -93,13 +94,13 @@ try {
   check('re-import is POSITIONED (not flattened)', r.layout === 'positioned');
   check('both pages restored', r.pageCount === 2);
   check('each page has a raster background', r.pagesHaveBg === true);
+  check('sidecar restores the ORIGINAL raster (baked, not erased)', r.bgIsOriginal === true);
   check('both lines restored as posboxes', r.boxCount === 2);
-  check('boxes are revealed (visible at rest over erased raster)', r.allRevealed === true);
-  check('boxes are transparent (no visible box)', r.allTransparent === true);
   check('text preserved', r.texts.includes('RAILWAY RECRUITMENT BOARD') && r.texts.includes('Registration No : L72511691071'));
   check('lines land on their own pages', r.pageOf[0] === 0 && r.pageOf[1] === 1);
+  check('fills preserved verbatim (dormant masking intact)', r.fills[0] === '#ffffff' && r.fills[1] === '#eeeeee');
   check('bold survived the round-trip', r.firstBold === true);
-  check('frame position is near the original (±3px)', r.firstFrame && Math.abs(r.firstFrame.x - 100) <= 3 && Math.abs(r.firstFrame.y - 80) <= 3);
+  check('frame position is EXACT (sidecar, no rounding)', r.firstFrame && r.firstFrame.x === 100 && r.firstFrame.y === 80);
 } catch (e) {
   console.log('SKIPPED:', String(e.message || e).split('\n')[0]);
   if (browser) await browser.close();

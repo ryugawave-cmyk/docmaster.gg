@@ -172,7 +172,14 @@ export async function positionedModelToDocx(doc) {
   const documentXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document ${DOC_NS}><w:body>${parts.join('')}</w:body></w:document>`;
-  return packDocx(documentXml, media, rels);
+  // Re-import sidecar: the ORIGINAL positioned model (dormant boxes + original,
+  // non-erased page rasters). Re-opening in the Document editor restores this
+  // verbatim — a pixel-perfect round-trip (no font-substitution/overlap), instead of
+  // rebuilding lossily from the OOXML frames. Word/LibreOffice ignore this part.
+  let extraParts = [];
+  try { extraParts = [{ name: 'docmaster/model.json', ext: 'json', data: JSON.stringify({ v: 1, model: doc }) }]; }
+  catch { extraParts = []; } // never let sidecar serialization fail the export
+  return packDocx(documentXml, media, rels, extraParts);
 }
 
 /** Paint each line's sampled `fill` over its glyphs in the page raster, so the export
@@ -990,10 +997,11 @@ function pictureGraphic(w, h, rId, id) {
 
 /* ------------------------------ packaging -------------------------------- */
 
-function packDocx(documentXml, media, rels) {
+function packDocx(documentXml, media, rels, extraParts = []) {
   const hasImg = media.length > 0;
   const usesPng = media.some((m) => m.ext === 'png');
   const usesJpg = media.some((m) => m.ext === 'jpg');
+  const usesJson = extraParts.some((p) => p.ext === 'json');
 
   const contentTypes =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
@@ -1002,6 +1010,7 @@ function packDocx(documentXml, media, rels) {
     '<Default Extension="xml" ContentType="application/xml"/>' +
     (usesPng ? '<Default Extension="png" ContentType="image/png"/>' : '') +
     (usesJpg ? '<Default Extension="jpg" ContentType="image/jpeg"/>' : '') +
+    (usesJson ? '<Default Extension="json" ContentType="application/json"/>' : '') +
     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
     '</Types>';
 
@@ -1026,6 +1035,9 @@ function packDocx(documentXml, media, rels) {
     entries.push({ name: 'word/_rels/document.xml.rels', data: docRels });
     for (const m of media) entries.push({ name: `word/media/${m.name}`, data: m.bytes });
   }
+  // Non-standard extra parts (our re-import sidecar). Word/LibreOffice ignore parts
+  // they don't reference; a Default content type keeps the package OPC-valid.
+  for (const p of extraParts) entries.push({ name: p.name, data: p.data });
 
   return zipBlob(entries, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }

@@ -25,6 +25,24 @@ const HALFPT_TO_PX = (hp) => (parseInt(hp, 10) / 2) * PT_TO_PX;  // w:sz is half
 export async function docxToBlockModel(buf, title = 'Document') {
   const files = await unzip(new Uint8Array(buf));
   const dec = new TextDecoder();
+
+  // Re-import sidecar: our positioned Word export embeds the ORIGINAL document model
+  // (dormant boxes + original, non-erased page rasters). Restoring it verbatim is a
+  // pixel-perfect round-trip — no font-substitution overlap from rebuilding out of
+  // the OOXML frames. Preferred over reconstructPositioned when present.
+  const sidecar = files.get('docmaster/model.json');
+  if (sidecar) {
+    try {
+      const m = (JSON.parse(dec.decode(sidecar)) || {}).model;
+      if (m && m.layout === 'positioned' && Array.isArray(m.blocks)) {
+        const doc = createDocument({ title: m.title || title, source: 'docx', page: m.page, blocks: m.blocks, header: m.header, footer: m.footer });
+        doc.layout = 'positioned';
+        doc.pages = Array.isArray(m.pages) ? m.pages : [];
+        return doc;
+      }
+    } catch { /* corrupt sidecar → fall through to OOXML import */ }
+  }
+
   const documentXml = files.get('word/document.xml');
   if (!documentXml) return createDocument({ title, source: 'docx' });
 
