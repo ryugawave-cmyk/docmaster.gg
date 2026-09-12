@@ -3,21 +3,25 @@
  *
  * The dormant transfer model keeps the original glyphs baked in the page raster and
  * hides each editable box until it is focused; on reveal the box masks the baked
- * glyph and re-draws the line in a substitute font (Arial/Inter). That substitute is
- * usually a little NARROWER than the PDF's embedded font, so a revealed line used to
- * look smaller than the page image it replaced.
+ * glyph and re-draws the line in a substitute font (Arial/Inter). The PDF's embedded
+ * font usually inks LARGER than the substitute — sometimes wider, but often just
+ * TALLER at the same width — so a revealed line used to look smaller than the page
+ * image it replaced.
  *
- * `fitBoxFontToWidth` (positionedImport.js) scales each box's font up until the
- * re-drawn text spans the same width as the original PDF run (`_tw`). This guards:
- *   1. a narrower substitute is ENLARGED toward the original width,
- *   2. growth is CAPPED at FIT_MAX (a huge width gap can't balloon a line),
- *   3. a substitute that is already ≥ the original is left UNCHANGED (never shrunk),
- *   4. a sub-FIT_MIN gap is ignored (no pointless reflow),
- *   5. the box height grows with the enlarged font (line isn't clipped),
- *   6. no `_tw` (e.g. OCR boxes) → untouched.
+ * `fitBoxFontToInk` (positionedImport.js) fixes this by matching inked HEIGHT: it
+ * measures the baked line's real pixel height in the raster and scales the box font
+ * so the substitute inks the same height. This guards:
+ *   1. measureInkHeight finds a text band's height and ignores the background,
+ *   2. ink that fills the whole box (a border/rule) is rejected (null),
+ *   3. a blank region is rejected (null),
+ *   4. a substitute that inks SHORTER than the baked glyph is enlarged to match,
+ *   5. the scale is clamped at FIT_HI (a mis-detected band can't balloon a line),
+ *   6. a near-match (< FIT_EPS) is left unchanged (no pointless reflow),
+ *   7. no raster / no canvas (e.g. Node) → every size untouched (fail-safe).
  *
- * Drives the REAL shipping function with a stub canvas whose measureText width is a
- * knob, so each case pins an exact scale. Run: `node scripts/verify-posbox-fit.mjs`.
+ * Drives the REAL shipping functions: measureInkHeight is pure (synthetic pixels);
+ * fitBoxFontToInk runs against a stub canvas/Image whose pixels and text metrics are
+ * knobs. Run: `node scripts/verify-posbox-fit.mjs`.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,14 +36,26 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'docmaster-fit-'));
 fs.cpSync(path.join(ROOT, 'public/js/app'), path.join(tmp, 'app'), { recursive: true });
 fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ type: 'module' }));
 
-// Stub canvas: measureText returns `MEASURED` px regardless of the string, so a test
-// can pin the substitute width exactly and thus the scale the fitter must compute.
-let MEASURED = 0;
+// ---- browser stubs (installed before import; the module reads them lazily) -------
+let PIXELS = null;   // Uint8ClampedArray for the "raster" the fitter decodes
+let RW = 0, RH = 0;  // raster dimensions
+let DOM_H = 0;       // actualBoundingBox height the stub measureText reports
+globalThis.Image = class {
+  set src(_v) { this.naturalWidth = RW; this.naturalHeight = RH; queueMicrotask(() => this.onload && this.onload()); }
+};
 globalThis.document = {
-  createElement: () => ({ getContext: () => ({ font: '', measureText: () => ({ width: MEASURED }) }) }),
+  createElement: () => ({
+    width: 0, height: 0,
+    getContext: () => ({
+      font: '',
+      measureText: () => ({ actualBoundingBoxAscent: DOM_H, actualBoundingBoxDescent: 0 }),
+      drawImage: () => {},
+      getImageData: () => ({ data: PIXELS }),
+    }),
+  }),
 };
 
-const { fitBoxFontToWidth, FIT_MIN, FIT_MAX } =
+const { measureInkHeight, fitBoxFontToInk, FIT_HI, FIT_EPS } =
   await import(pathToFileURL(path.join(tmp, 'app/services/convert/positionedImport.js')).href);
 
 let failures = 0;
@@ -48,89 +64,85 @@ function check(name, cond) {
   console.error(`FAIL  ${name}`);
   failures += 1;
 }
-// A one-run box at 20px, real PDF extent 200px, box height 26px.
+
+// White raster W×H with a black band on rows [ry0, ry1). `cov` = fraction of the
+// width inked, so a text-like band (partial coverage) can be told from a solid rule.
+function raster(W, H, ry0, ry1, cov = 0.5) {
+  const d = new Uint8ClampedArray(W * H * 4); d.fill(255);
+  const xe = 2 + Math.round((W - 4) * cov);
+  for (let y = ry0; y < ry1; y += 1) for (let x = 2; x < xe; x += 1) {
+    const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = 0; d[i + 3] = 255;
+  }
+  return d;
+}
+const WHITE = 255; // bg luminance passed to measureInkHeight (the box's sampled fill)
+
+/* 1. measureInkHeight: a 24px-tall text-like band on a 100×40 raster (scale 1) → 24. */
+{
+  const d = raster(100, 40, 8, 32); // rows 8..31 inked at 50% width = 24 rows
+  const h = measureInkHeight(d, 100, 40, { x: 0, y: 0, w: 100, h: 40 }, 1, WHITE);
+  check('measureInkHeight reports the band height', h === 24);
+}
+
+/* 2. A solid full-width bar (a rule/border) → null (not a line of text). */
+{
+  const d = raster(100, 40, 8, 32, 1.0); // 100% width = solid bar
+  const h = measureInkHeight(d, 100, 40, { x: 0, y: 0, w: 100, h: 40 }, 1, WHITE);
+  check('solid full-width bar rejected', h === null);
+}
+
+/* 3. Blank region → null. */
+{
+  const d = raster(100, 40, 0, 0); // no ink
+  const h = measureInkHeight(d, 100, 40, { x: 0, y: 0, w: 100, h: 40 }, 1, WHITE);
+  check('blank region rejected', h === null);
+}
+
+// A one-run box; frame maps 1:1 to the raster (scale 1).
 function box(overrides = {}) {
   return {
+    page: 0,
+    fill: 'ffffff', // sampled bg → white; measureInkHeight uses it as the bg reference
     runs: [{ text: 'RAILWAY RECRUITMENT BOARD', marks: { fontSize: 20, fontFamily: 'Arial', bold: true } }],
-    frame: { x: 0, y: 0, w: 220, h: 26 },
-    _tw: 200,
+    frame: { x: 0, y: 0, w: 100, h: 40 },
     ...overrides,
   };
 }
+const page = () => ({ bg: 'data:stub', width: RW, height: RH });
 
-// 1. Narrow substitute (160px < 200px extent) → enlarge by 200/160 = 1.25, capped to FIT_MAX.
+/* 4. Substitute inks SHORTER than baked → enlarge to match (baked 24, dom 20 → 1.2×). */
 {
-  MEASURED = 160;
+  RW = 100; RH = 40; PIXELS = raster(RW, RH, 8, 32); DOM_H = 20; // baked band = 24
   const b = box();
-  fitBoxFontToWidth([b]);
-  const expected = Math.round(20 * FIT_MAX); // 1.25 exceeds the 1.22 cap
-  check('narrow substitute enlarged and capped at FIT_MAX', b.runs[0].marks.fontSize === expected);
-  // frame.h must NOT grow — the box height sizes the opaque mask fill, and a taller
-  // fill would reach down over the next baked line and clip it ("sink").
-  check('enlarging does NOT grow the box height (fill stays off the next line)', b.frame.h === 26);
+  await fitBoxFontToInk([page()], [b]);
+  check('shorter substitute enlarged to the baked height', b.runs[0].marks.fontSize === Math.round(20 * (24 / 20)));
 }
 
-// 2. Narrow substitute within the cap (185px → 200/185 ≈ 1.081) → exact scale.
+/* 5. Huge baked band → scale clamped at FIT_HI. */
 {
-  MEASURED = 185;
+  RW = 100; RH = 80; PIXELS = raster(RW, RH, 4, 76); DOM_H = 20; // baked band ≈ 72 → 3.6×
+  const b = box({ frame: { x: 0, y: 0, w: 100, h: 80 } });
+  await fitBoxFontToInk([page()], [b]);
+  check('over-tall band is clamped at FIT_HI', b.runs[0].marks.fontSize === Math.round(20 * FIT_HI));
+}
+
+/* 6. Baked height ≈ substitute height (within FIT_EPS) → unchanged. */
+{
+  RW = 100; RH = 40; PIXELS = raster(RW, RH, 8, 28); DOM_H = 20; // baked band = 20
+  check('sanity: 20 vs 20 is within FIT_EPS', Math.abs(20 / 20 - 1) < FIT_EPS);
   const b = box();
-  const scale = 200 / 185;
-  check('scale is within cap (sanity)', scale < FIT_MAX && scale > FIT_MIN);
-  fitBoxFontToWidth([b]);
-  check('sub-cap gap uses the exact width-fit scale', b.runs[0].marks.fontSize === Math.round(20 * scale));
+  await fitBoxFontToInk([page()], [b]);
+  check('near-match left unchanged', b.runs[0].marks.fontSize === 20);
 }
 
-// 3. Substitute already WIDER than the original → never shrink.
+/* 7. Fail-safe: no page raster → no throw, sizes untouched. */
 {
-  MEASURED = 230;
-  const b = box();
-  fitBoxFontToWidth([b]);
-  check('wider substitute is left unchanged (no shrink)', b.runs[0].marks.fontSize === 20);
-  check('unchanged box keeps its height', b.frame.h === 26);
-}
-
-// 4. Gap below FIT_MIN (198px → 1.01) → ignored (no reflow).
-{
-  MEASURED = 198;
-  const b = box();
-  check('gap is below FIT_MIN (sanity)', 200 / 198 < FIT_MIN);
-  fitBoxFontToWidth([b]);
-  check('sub-FIT_MIN gap ignored', b.runs[0].marks.fontSize === 20);
-}
-
-// 5. Multi-run box: every run scales by the SAME factor (relative sizes preserved).
-{
-  MEASURED = 160; // → cap FIT_MAX
-  const b = box({
-    runs: [
-      { text: 'Big ', marks: { fontSize: 24, fontFamily: 'Arial' } },
-      { text: 'small', marks: { fontSize: 12, fontFamily: 'Arial' } },
-    ],
-  });
-  fitBoxFontToWidth([b]);
-  check('run 0 scaled by cap', b.runs[0].marks.fontSize === Math.round(24 * FIT_MAX));
-  check('run 1 scaled by the same cap', b.runs[1].marks.fontSize === Math.round(12 * FIT_MAX));
-}
-
-// 6. No `_tw` (e.g. an OCR-recovered box) → untouched.
-{
-  MEASURED = 10;
-  const b = box({ _tw: undefined });
-  fitBoxFontToWidth([b]);
-  check('box without _tw is untouched', b.runs[0].marks.fontSize === 20);
-}
-
-// 7. Fail-safe: no canvas (Node without the stub) → no throw, no change.
-{
-  const saved = globalThis.document;
-  globalThis.document = { createElement: () => ({ getContext: () => null }) };
   const b = box();
   let threw = false;
-  try { fitBoxFontToWidth([b]); } catch { threw = true; }
-  globalThis.document = saved;
-  check('missing canvas context does not throw', !threw);
-  check('missing canvas context leaves sizes untouched', b.runs[0].marks.fontSize === 20);
+  try { await fitBoxFontToInk([{ bg: null, width: 100, height: 40 }], [b]); } catch { threw = true; }
+  check('missing raster does not throw', !threw);
+  check('missing raster leaves sizes untouched', b.runs[0].marks.fontSize === 20);
 }
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
-console.log('\nAll posbox width-fit checks passed.');
+console.log('\nAll posbox ink-fit checks passed.');

@@ -185,20 +185,18 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
         // focused/edited — where it covers the original glyph baked beneath so the
         // editable text replaces it cleanly.
         fill: seg.bg || '#ffffff',
-        // scratch data (removed below): heading inference + the original PDF text
-        // extent (`_tw`), used to width-fit the substitute font so a revealed box
-        // does not look smaller than the baked glyph it covers.
+        // scratch data for heading inference (removed below)
         _size: Math.round(fs), _bold: bold, _len: text.trim().length,
-        _tw: Math.round(Math.max(0, seg.right - seg.x)),
       });
     }
   });
 
   // Match each revealed overlay's apparent size to the baked original (fixes "text
   // shrinks when I click it"). The dormant model masks the baked glyph and re-draws
-  // the line in a substitute font, which is usually a little NARROWER than the PDF's
-  // embedded font, so a revealed line looks smaller than the page image it replaced.
-  fitBoxFontToWidth(blocks);
+  // the line in a substitute font that inks smaller than the PDF's embedded font, so
+  // a revealed line looks smaller than the page image it replaced. Size each box's
+  // font so its inked HEIGHT matches the baked line's height in the raster.
+  await fitBoxFontToInk(pages, blocks);
 
   // Transparent-box masking: make each overlay box show ONLY its text over the page
   // image (no opaque rectangle hiding the artwork). Where the line's surround is
@@ -243,7 +241,7 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
       else if (ratio >= 1.12 || (b._bold && ratio >= 1.02)) level = 3;
     }
     if (level) b.heading = level;
-    delete b._size; delete b._bold; delete b._len; delete b._tw;
+    delete b._size; delete b._bold; delete b._len;
   }
 
   // Uniform page size for the editor's sheets: use the first page's native size
@@ -263,49 +261,119 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
   return doc;
 }
 
-/* ------------------------------ width-fit overlay ------------------------------
- * Keep a revealed box the same apparent size as the baked page image it covers.
+/* ---------------------------- ink-height overlay fit ----------------------------
+ * Keep a revealed box the same apparent SIZE as the baked page image it covers.
  *
  * In the dormant model the page raster keeps the ORIGINAL glyphs; a box is hidden
  * until clicked, then it paints its sampled fill over the baked glyph and re-draws
- * the line in a substitute font (Arial/Inter). That substitute is usually a little
- * NARROWER than the PDF's embedded font, so revealing a field visibly shrinks it.
+ * the line in a substitute font (Arial/Inter). The PDF's embedded font is usually a
+ * little larger PER EM than the substitute — sometimes wider, but often just TALLER
+ * (heavier display faces) at the same width — so revealing a field visibly shrinks
+ * it. Matching WIDTH alone misses the taller-not-wider case, so instead we match the
+ * inked HEIGHT, which is font-agnostic: measure the baked line's real pixel height in
+ * the raster, measure what the substitute would ink at the current size, and scale
+ * the font by the ratio so the revealed line is the same height as the page image.
  *
- * For each box, measure the re-drawn text and, if it is narrower than the original
- * PDF run (`_tw`), scale the font up until it spans the same width — so revealing a
- * field does not change its size. ENLARGE-ONLY (never shrinks a line below its
- * current size, so this can't introduce a NEW shrink) and CAPPED (a mis-measure or
- * a letter-spaced heading can't balloon). Browser-only (canvas measureText); any
- * failure (e.g. Node) leaves every size untouched. */
-export const FIT_MIN = 1.03; // ignore sub-3% gaps (measurement noise; not worth a reflow)
-export const FIT_MAX = 1.22; // cap growth so tracking / a mis-measure can't balloon a line
-export function fitBoxFontToWidth(blocks) {
-  let ctx;
-  try { ctx = document.createElement('canvas').getContext('2d'); } catch { return; }
-  if (!ctx || typeof ctx.measureText !== 'function') return;
+ * The SAME string is measured on both sides (baked ink vs the substitute's
+ * actualBoundingBox), so ascenders/descenders/caps line up and the ratio is a true
+ * size correction. Clamped so a mis-detected border/neighbour can't balloon or
+ * collapse a line; ink that fills the whole box (a rule/box border, not text) is
+ * ignored. Browser-only (canvas); any failure (e.g. Node, tainted raster) leaves
+ * every size untouched. `frame.h` is deliberately NOT grown — it also sizes the
+ * opaque mask fill, and a taller fill would reach down over the next baked line;
+ * line-height:1 + overflow:visible shows the enlarged glyph in full regardless. */
+export const FIT_LO = 0.8;  // clamp: never collapse a line below 80%
+export const FIT_HI = 1.6;  // clamp: never balloon a line above 160%
+export const FIT_EPS = 0.03; // ignore sub-3% corrections (measurement noise)
+
+/** Luminance (0..255) of a '#rrggbb' / 'rrggbb' fill, or null if not parseable. */
+function lumFromHex(hex) {
+  const h = String(hex || '').replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** Inked height (in page/CSS px) of the glyphs inside `f`, or null if no line of text
+ *  can be told apart from the background. `bgLum` is the box's sampled background
+ *  luminance (the box hugs its line, so the text fills most of the region and a
+ *  median can't find the paper — the caller passes the sampled fill instead).
+ *  `scale` = raster px per page px. A row counts as TEXT only when its ink fraction
+ *  is in [0.05, 0.92]: below that is a stray border pixel / margin, above that is a
+ *  solid rule or a filled/complex background — so bars and boxes don't masquerade as
+ *  a line height. Pure — unit-testable. */
+export function measureInkHeight(data, W, H, f, scale, bgLum) {
+  const x0 = Math.max(0, Math.round(f.x * scale));
+  const y0 = Math.max(0, Math.round(f.y * scale));
+  const x1 = Math.min(W, Math.round((f.x + f.w) * scale));
+  const y1 = Math.min(H, Math.round((f.y + f.h) * scale));
+  const wpx = x1 - x0;
+  if (wpx < 2 || y1 - y0 < 2) return null;
+  const lum = (x, y) => { const i = (y * W + x) * 4; return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; };
+  let bg = bgLum;
+  if (bg == null) { // no sampled fill: fall back to a coarse median (assumes minority ink)
+    const s = [];
+    const sx = Math.max(1, Math.floor(wpx / 24));
+    for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += sx) s.push(lum(x, y));
+    s.sort((a, b) => a - b); bg = s[s.length >> 1];
+  }
+  const THRESH = 60;                          // luminance delta that counts as ink
+  let first = -1, last = -1;
+  for (let y = y0; y < y1; y += 1) {
+    let n = 0;
+    for (let x = x0; x < x1; x += 1) if (Math.abs(lum(x, y) - bg) > THRESH) n += 1;
+    const frac = n / wpx;
+    if (frac >= 0.05 && frac <= 0.92) { if (first < 0) first = y; last = y; } // a text row
+  }
+  if (first < 0) return null;                 // no text-like row → leave the size alone
+  return (last - first + 1) / scale;
+}
+
+export async function fitBoxFontToInk(pages, blocks) {
+  let mctx;
+  try { mctx = document.createElement('canvas').getContext('2d'); } catch { return; }
+  if (!mctx || typeof mctx.measureText !== 'function') return;
+  // Group boxes by page so each raster is decoded once.
+  const byPage = new Map();
   for (const b of blocks) {
-    const tw = b._tw; // original PDF text extent, px
-    const runs = b.runs || [];
-    if (!tw || tw < 4 || !runs.length) continue;
-    const text = runs.map((r) => r.text || '').join('');
-    if (text.replace(/\s/g, '').length < 2) continue; // too little to measure reliably
-    const m0 = runs[0].marks || {};
-    const fs = m0.fontSize || 14;
-    const family = m0.fontFamily || 'Arial, Helvetica, sans-serif';
-    // Measure with the SAME face/weight/style the editor renders (editableHtml), so
-    // the measured width matches what the user will actually see on reveal.
-    ctx.font = `${m0.italic ? 'italic ' : ''}${m0.bold ? '700' : '400'} ${fs}px ${family}`;
-    const measured = ctx.measureText(text).width;
-    if (!(measured > 0) || measured >= tw) continue; // substitute already ≥ original: don't shrink
-    const scale = Math.min(tw / measured, FIT_MAX);
-    if (scale < FIT_MIN) continue;
-    for (const r of runs) {
-      const cur = (r.marks && r.marks.fontSize) || fs;
-      if (r.marks) r.marks.fontSize = Math.max(5, Math.round(cur * scale));
+    if (!b.runs || !b.runs.length) continue;
+    if (!byPage.has(b.page)) byPage.set(b.page, []);
+    byPage.get(b.page).push(b);
+  }
+  for (const [pi, list] of byPage) {
+    const pg = pages[pi];
+    if (!pg || !pg.bg) continue;
+    let data, W, H, scale;
+    try {
+      const img = await loadImg(pg.bg);
+      W = img.naturalWidth || img.width; H = img.naturalHeight || img.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      const cx = canvas.getContext('2d');
+      cx.drawImage(img, 0, 0);
+      data = cx.getImageData(0, 0, W, H).data;
+      scale = W / (pg.width || W);
+    } catch { continue; } // tainted/undecodable raster → skip this page (no-op)
+    for (const b of list) {
+      const text = b.runs.map((r) => r.text || '').join('');
+      if (text.replace(/\s/g, '').length < 2) continue; // too little to measure reliably
+      const m0 = b.runs[0].marks || {};
+      const fs = m0.fontSize || 14;
+      const family = m0.fontFamily || 'Arial, Helvetica, sans-serif';
+      mctx.font = `${m0.italic ? 'italic ' : ''}${m0.bold ? '700' : '400'} ${fs}px ${family}`;
+      const tm = mctx.measureText(text);
+      const hDom = (tm.actualBoundingBoxAscent || 0) + (tm.actualBoundingBoxDescent || 0);
+      if (!(hDom > 0)) continue;              // no metrics → leave the size alone
+      const hBaked = measureInkHeight(data, W, H, b.frame, scale, lumFromHex(b.fill));
+      if (!hBaked) continue;
+      let s = hBaked / hDom;
+      if (!(s > 0) || Math.abs(s - 1) < FIT_EPS) continue; // already matches
+      s = Math.max(FIT_LO, Math.min(FIT_HI, s));
+      for (const r of b.runs) {
+        const cur = (r.marks && r.marks.fontSize) || fs;
+        if (r.marks) r.marks.fontSize = Math.max(5, Math.round(cur * s));
+      }
     }
-    // Deliberately DON'T grow frame.h: the box height also sizes the opaque mask
-    // fill, and a taller fill reaches down over the next baked line and clips it.
-    // line-height:1 + overflow:visible means the enlarged glyph still shows in full.
   }
 }
 
