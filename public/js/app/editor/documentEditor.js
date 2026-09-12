@@ -1242,10 +1242,26 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   }
 
   /* ---------------------------- text editing ---------------------------- */
-  page.addEventListener('input', () => {
+  page.addEventListener('input', (e) => {
+    // Dormant positioned box: once its text is actually edited, keep it revealed so
+    // the change stays visible (it must not snap back to showing the original raster).
+    const edited = e.target && e.target.closest && e.target.closest('.doc-posbox');
+    if (edited) edited.dataset.edited = '1';
     clearTimeout(inputTimer);
     inputTimer = setTimeout(commit, 350);
     schedulePaginate(); // reflow pages as you type, without waiting for commit
+  });
+
+  // Dormant reveal: a positioned box is hidden (original page image shows through)
+  // until focused — click it to reveal + edit. On blur it re-hides UNLESS it was
+  // edited, so untouched fields stay pixel-exact while edited ones keep their change.
+  page.addEventListener('focusin', (e) => {
+    const box = e.target && e.target.closest && e.target.closest('.doc-posbox--dormant');
+    if (box) box.classList.remove('doc-posbox--dormant');
+  });
+  page.addEventListener('focusout', (e) => {
+    const box = e.target && e.target.closest && e.target.closest('.doc-posbox');
+    if (box && box.dataset.edited !== '1') box.classList.add('doc-posbox--dormant');
   });
 
   // Click an image to select it (show resize handles); click anywhere else to

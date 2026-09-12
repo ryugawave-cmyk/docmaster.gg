@@ -332,20 +332,15 @@ export function createBlankEditorShell({ container, bus }) {
       say('Reproducing the exact layout (positions, fonts, tables, images)…');
       // Build a positioned exact-layout Document directly from the PDF's own
       // coordinates — masked page raster + editable text boxes at their real x/y.
-      // `ocr:true` also recovers text baked into banners/diagrams as editable boxes
-      // (first run downloads the OCR model; unavailable → transfer still completes).
-      let ocrNotInstalled = false;
-      const doc = await pdfModelToPositionedDoc(model, docName, {
-        ocr: true,
-        onOcrProgress: (done, total) => say(`Reading image text… page ${done + 1} of ${total}`),
-        onOcrUnavailable: () => { ocrNotInstalled = true; },
-      });
+      // OCR is OFF on purpose: it re-reads text BAKED into the page (rotated/vertical
+      // border frames, diagonal watermarks, template labels — all of which pdfImport
+      // already leaves baked) and dumps it back as misplaced boxes, which was the
+      // clutter over the exact layout. Without it, only the real PDF text-layer runs
+      // become editable boxes and every decoration stays pixel-exact in the raster.
+      const doc = await pdfModelToPositionedDoc(model, docName, { ocr: false });
       say('Opening in the Document editor…');
       // Hand the model straight to the Document workspace (no file, no import).
       bus.emit('workspace:open-doc-model', { model: doc, name: docName });
-      if (ocrNotInstalled) {
-        bus.emit('toast', 'Text inside images stays as a picture — install on-device OCR (/vendor/tesseract) to make it editable too.');
-      }
     } catch (err) {
       console.error('[transfer-to-doc]', err);
       bus.emit('toast', 'Sorry — this PDF could not be transferred to the Document editor.');

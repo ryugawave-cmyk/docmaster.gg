@@ -82,12 +82,20 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
     return inRegion > segs.length * 0.35 ? [] : regs;
   });
 
+  // Combined "figure" regions per page = embedded XObject images (photo, QR, logo,
+  // seal) + detected vector-graphic/diagram regions. Text whose majority sits inside
+  // EITHER is PART OF a picture — a photo's "Photo" placeholder, a QR's "QR Code"
+  // label, an emblem's caption — so it must stay baked, never lifted into an editable
+  // box over the art. Previously only vector graphics were gated, so labels under
+  // embedded PHOTOS/QR leaked through as boxes floating on the image (the reported bug).
+  const figures = content.pages.map((_, i) => (imageRegions[i] || []).concat(graphicRegions[i] || []));
+
   // Text-erased backgrounds (one per page) so editable overlay boxes don't double the
-  // baked glyphs. Runs INSIDE a graphic region are protected: they are part of the
+  // baked glyphs. Runs INSIDE a figure region are protected: they are part of the
   // illustration and must stay baked, not be erased and re-placed. Best-effort — on
   // failure fall back to the raw raster.
   let cleanBgs = [];
-  try { cleanBgs = await maskExtractedText(model, { protect: graphicRegions }); } catch { cleanBgs = []; }
+  try { cleanBgs = await maskExtractedText(model, { protect: figures }); } catch { cleanBgs = []; }
 
   const pages = [];
   const blocks = [];
@@ -104,13 +112,23 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
   }
 
   content.pages.forEach((pg, pi) => {
-    const bg = (cleanBgs && cleanBgs[pi]) || pg.bg || null;
+    // DORMANT model: keep the ORIGINAL page raster (NOT the text-erased one) as the
+    // page background, so the resting view is pixel-identical to the source — exact
+    // fonts, weight, spacing and every baked table rule. The editable overlay boxes
+    // are hidden until focused (editableHtml adds `doc-posbox--dormant`; app.css hides
+    // their text + fill until :focus/reveal), so nothing is re-drawn on top and there
+    // is no font-substitution overlap/doubling. Editing a box reveals it and its
+    // opaque `fill` masks the original glyph beneath. (cleanBgs kept only as a fallback
+    // for a page whose original raster is somehow missing.)
+    const bg = pg.bg || (cleanBgs && cleanBgs[pi]) || null;
     pages.push({ bg, width: pg.w, height: pg.h });
     // Mask complex scripts into the raster only when we actually have a raster to
     // keep them in; otherwise emit them as editable boxes too.
     const mask = !!bg;
-    const pageGraphics = graphicRegions[pi] || [];
-    for (const seg of segmentRuns(pg.runs, { mask })) {
+    const pageGraphics = figures[pi] || []; // XObject images + vector graphics
+    const segs = segmentRuns(pg.runs, { mask });
+    for (let si = 0; si < segs.length; si++) {
+      const seg = segs[si];
       const first = seg.parts[0] && seg.parts[0].run;
       if (!first) continue;
       const fs = first.fontSize || 14;
@@ -123,9 +141,19 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
       const runs = seg.parts.map(({ run, space }) => {
         const t = (space ? ' ' : '') + (run.text || '');
         text += t; if (run.bold) bold = true;
-        const sz = Math.round(run.fontSize || fs);
+        // Render at the PDF's TRUE px size — no shrink. In the dormant model the overlay
+        // is shown only while its own box is being edited, so there is no neighbouring
+        // overlay to collide with. Matching the real size means revealing a field does
+        // NOT change its apparent size (only the font face differs from the baked glyph).
+        const sz = Math.max(5, Math.round(run.fontSize || fs));
+        // The DOC model's weight is binary (bold or not), so a run the PDF marks as
+        // MEDIUM (500) would otherwise flatten to regular and read lighter than the
+        // baked original. Treat medium-and-up as bold so weighted form labels stay
+        // heavy. (run.bold already covers semibold 600+; this adds the 500 case.
+        // Regular 400 fonts are untouched — no blanket bolding.)
+        const heavy = !!run.bold || (run.fontWeight || 0) >= 500;
         return createRun(t, {
-          bold: !!run.bold, italic: !!run.italic, underline: !!run.underline,
+          bold: heavy, italic: !!run.italic, underline: !!run.underline,
           fontFamily: run.fontFamily || 'Inter', fontSize: sz, color: hexOf(run.color),
         });
       });
@@ -133,19 +161,26 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
       // and at least one line tall. Page-relative — the editor adds the page offset.
       const w = Math.round(Math.max(seg.right - seg.x, fs * 0.5) + fs * 0.6);
       const h = Math.round(Math.max(seg.h || 0, fs * 1.3));
+      // A posbox is ONE PDF line. The editor's substitute font is a little wider than
+      // the PDF's, so a multi-word line in a NARROW box (a label/value inside a table
+      // cell) would wrap to a 2nd visual line that lands on the baked line below it —
+      // the bilingual label overlapping its Hindi. Keep such boxes single-line; wide
+      // boxes (paragraphs) still wrap normally. Overflow on a narrow box just extends
+      // slightly into its own cell's whitespace, which is far less jarring than a wrap.
+      const nowrap = w < pg.w * 0.5;
       blocks.push({
         id: `pos-${(++boxSeq).toString(36)}`,
         type: 'posbox',
         page: pi,
         frame: { x: Math.round(seg.x), y: Math.round(seg.top), w, h },
         style: { align: first.align || 'left' },
+        nowrap,
         runs: runs.length ? runs : [createRun('')],
-        // Initial mask fill from the importer's sampled background. maskPositionedBoxes
-        // below finalises this: it ERASES the baked glyph and clears the fill to '' so
-        // the box is transparent (page image shows through), keeping an opaque fill
-        // only where the text sits on artwork that can't be erased. This value is the
-        // fail-safe used if that canvas pass can't run.
-        fill: seg.bg || '',
+        // Opaque mask fill (sampled page colour; white fallback). In the dormant model
+        // the box is invisible at rest, so this fill is only shown when the box is
+        // focused/edited — where it covers the original glyph baked beneath so the
+        // editable text replaces it cleanly.
+        fill: seg.bg || '#ffffff',
         // scratch data for heading inference (removed below)
         _size: Math.round(fs), _bold: bold, _len: text.trim().length,
       });
@@ -160,7 +195,10 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
   // coloured shape) the glyph can't be erased without smearing, so the box keeps an
   // opaque sampled fill to avoid doubling. Fail-safe: if the canvas is unavailable the
   // boxes keep their importer fill (opaque but correct — no doubling).
-  try { await maskPositionedBoxes(pages, blocks); } catch { /* canvas unavailable → leave as-is */ }
+  // NOTE: maskPositionedBoxes (which erased baked glyphs + made boxes transparent for
+  // the old "always re-drawn" model) is intentionally NOT called — the dormant model
+  // keeps the original raster intact and hides the overlay until edit, so there is
+  // nothing to erase and the boxes keep their opaque `fill` for reveal-time masking.
 
   // OCR pass: text baked into banners/diagrams/logos isn't in the PDF text layer, so
   // it isn't a box yet ("can't edit image text"). When enabled and an engine is

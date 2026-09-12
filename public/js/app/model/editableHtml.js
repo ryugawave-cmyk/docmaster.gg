@@ -64,7 +64,9 @@ function paragraphToEl(block) {
  */
 function posboxToEl(block) {
   const box = document.createElement('div');
-  box.className = 'doc-posbox';
+  // Dormant by default: hidden so the original page image shows through pixel-exact;
+  // the editor reveals it on focus and keeps it revealed once edited (documentEditor).
+  box.className = 'doc-posbox doc-posbox--dormant';
   box.dataset.blockId = block.id;
   const f = block.frame || {};
   box.dataset.page = String(block.page || 0);
@@ -80,6 +82,9 @@ function posboxToEl(block) {
   box.style.left = `${Math.round(f.x || 0)}px`;
   box.style.width = `${Math.round(f.w || 0)}px`;
   box.style.minHeight = `${Math.round(f.h || 0)}px`;
+  // One-line box (a table-cell label/value): don't let a slightly-wider substitute
+  // font wrap it onto the baked line beneath. See positionedImport (nowrap).
+  if (block.nowrap) { box.style.whiteSpace = 'nowrap'; box.dataset.nowrap = '1'; }
   // Mask fill sampled from the page background, so the box hides any baked glyphs
   // underneath (edits then visibly replace the text). Empty → transparent. `opacity`
   // (0..1, box BACKGROUND only) lets the user fade the box to reveal the page image
@@ -318,6 +323,7 @@ function readPosbox(el) {
   if (el.dataset.heading) block.heading = parseInt(el.dataset.heading, 10) || undefined;
   if (el.dataset.fill) block.fill = el.dataset.fill;
   if (el.dataset.opacity != null && el.dataset.opacity !== '') block.opacity = Math.max(0, Math.min(1, parseFloat(el.dataset.opacity)));
+  if (el.dataset.nowrap === '1') block.nowrap = true;
   return block;
 }
 

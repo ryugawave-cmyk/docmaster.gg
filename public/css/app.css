@@ -609,26 +609,40 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  line-height: 1.15;
+  /* line-height:1 (not 1.15) matches the PDF's tight line spacing so a stacked
+     table-cell label doesn't bleed onto the baked line beneath it. */
+  line-height: 1;
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  outline: none;
   cursor: text;
-  /* A faint editable-region hint so users can see where the text boxes are, without
-     obscuring the PDF underneath. Strengthens on hover/focus. */
-  border: 1px solid transparent;
   border-radius: 2px;
-  transition: border-color .12s, background-color .12s;
+  /* The editable-region hint is an OUTLINE, not a border: an outline is drawn
+     outside the box model, so it never consumes the box's content width (which
+     would push text into a wrap) nor shifts the text down by 1px. */
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  transition: outline-color .12s, background-color .12s;
 }
 .doc-page.is-positioned:not(.is-readonly) .doc-posbox:hover {
-  border-color: rgba(79, 70, 229, .28);
+  outline-color: rgba(79, 70, 229, .28);
   background: rgba(79, 70, 229, .04);
 }
+/* No focus box: a revealed positioned box shows only its (background-matching) fill +
+   text, so you edit in place. The blinking caret is the "you're editing here" cue —
+   an outline/wash would read as a stray box over the exact page image. */
 .doc-posbox:focus,
 .doc-posbox:focus-within {
-  border-color: rgba(79, 70, 229, .7);
-  background: rgba(255, 255, 255, .55);
+  outline-color: transparent;
 }
+/* DORMANT: the whole re-drawn overlay (text + its mask fill) is hidden so the ORIGINAL
+   page image (in the sheet behind) shows through pixel-exact — exact fonts/weight/
+   spacing and every baked table rule, with no font-substitution overlap or doubling.
+   `opacity` (NOT color/visibility) is deliberate: it hides the box while leaving it
+   clickable AND leaving each run's COMPUTED colour/size intact, so the model
+   serializer (readRuns → getComputedStyle) never captures the hidden state. The
+   editor removes this class on focus to reveal the editable text (its opaque fill then
+   masks the original glyph) and keeps it removed once the box has been edited. */
+.doc-posbox--dormant { opacity: 0; }
 /* A positioned box selected AS AN OBJECT (right-click): solid outline + resize
    handles (reusing .doc-imgsel). Raised so its handles sit above neighbouring boxes.
    The focus-within white wash is suppressed so it doesn't fight the object outline. */
