@@ -55,9 +55,13 @@ check('has document.xml', s.includes('word/document.xml'));
 check('embeds a page raster image', s.includes('word/media/image1'));
 check('lays the raster as a picture', s.includes('pic:pic'));
 check('raster sits BEHIND the text', s.includes('behindDoc="1"'));
-check('emits editable wps text boxes', s.includes('wps:wsp'));
+// Lines are POSITIONED TEXT FRAMES (inline-editable), not floating text boxes (which
+// Word treats as select-first drawing objects).
+check('emits positioned text frames', s.includes('<w:framePr'));
+check('frames anchor to the page', s.includes('w:vAnchor="page"') && s.includes('w:hAnchor="page"'));
+check('does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent'));
 check('keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
-check('masks with the sampled fill', s.includes('srgbClr val="ffffff"') && s.includes('srgbClr val="eeeeee"'));
+check('masks with the sampled fill (paragraph shading)', s.includes('w:fill="ffffff"') && s.includes('w:fill="eeeeee"'));
 // Two PDF pages → two Word sections (page breaks), so the layout doesn't collapse to one page.
 check('one section per page (2 pages)', (s.match(/<w:sectPr>/g) || []).length === 2);
 check('embeds the raster once per page (2 images)', s.includes('word/media/image2'));

@@ -90,10 +90,17 @@ export function modelToDocx(model, opts = {}) {
  * The model is different from the PDF-editor content model: `doc.layout==='positioned'`,
  * `doc.pages=[{bg,width,height}]` (per-page raster) and `doc.blocks` are `posbox`
  * blocks ({page, frame:{x,y,w,h}, style, fill, runs:[{text,marks}]}) — already ONE
- * box per line. So, exactly like `absoluteBody`, each page is a full-page raster
- * picture (all the borders/shading/seals/photo) with every line laid on top as a
- * page-anchored, editable text box FILLED with its sampled `fill` (masking the glyph
- * baked into the raster). Same look as the on-screen editor; text stays editable.
+ * box per line. Each page is the full-page raster picture (borders/shading/seals/
+ * photo) with every line laid on top.
+ *
+ * The overlay lines are POSITIONED TEXT FRAMES (`w:framePr`), NOT floating text boxes.
+ * A frame is a real body paragraph anchored to absolute page coordinates: you click
+ * it and type like normal text — no shape to select first, no double-click-to-edit,
+ * and no object border/handles. (Floating text boxes looked identical but Word treats
+ * them as drawing objects — single click selects the box, which is the "it treats it
+ * as a selection not editing" complaint.) Each frame is shaded with the box's sampled
+ * `fill` (`w:shd`) so it masks the glyph baked into the raster beneath; a matching
+ * fill makes the frame invisible, so there is no visible "box" either.
  */
 export function positionedModelToDocx(doc) {
   const pages = doc.pages || [];
@@ -127,25 +134,25 @@ export function positionedModelToDocx(doc) {
   list.forEach((pg, pi) => {
     const w = pg.width || fallbackW;
     const h = pg.height || fallbackH;
-    const anchors = [];
+    const pageParts = [];
+    // Page raster BEHIND the text (all the graphics: borders, shading, seal, photo).
     if (pg.bg) {
       const bgId = addImage(pg.bg);
-      anchors.push(anchor(0, 0, w, h, z++, pictureGraphic(w, h, bgId, z), true));
+      pageParts.push(`<w:p><w:r>${anchor(0, 0, w, h, z++, pictureGraphic(w, h, bgId, z), true)}</w:r></w:p>`);
     }
+    // Each line → a positioned, inline-editable text frame.
     for (const box of (boxesByPage.get(pi) || [])) {
-      const seg = posboxToSeg(box);
-      if (!seg.parts.length) continue;
-      const f = box.frame || {};
-      anchors.push(textboxAnchor(f.x || 0, f.y || 0, f.w || 0, f.h || 0, z++, seg));
+      const p = framedParagraph(box);
+      if (p) pageParts.push(p);
     }
     const sectPr = `<w:sectPr><w:pgSz w:w="${TW(w)}" w:h="${TW(h)}"/>`
       + '<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>';
-    const run = anchors.length ? `<w:r>${anchors.join('')}</w:r>` : '<w:r><w:t/></w:r>';
+    if (!pageParts.length) pageParts.push('<w:p><w:r><w:t/></w:r></w:p>');
     if (pi < list.length - 1) {
-      parts.push(`<w:p>${run}</w:p>`);
+      parts.push(pageParts.join(''));
       parts.push(`<w:p><w:pPr>${sectPr}</w:pPr></w:p>`); // ends section → page break
     } else {
-      parts.push(`<w:p>${run}</w:p>`);
+      parts.push(pageParts.join(''));
       parts.push(sectPr);
     }
   });
@@ -156,29 +163,32 @@ export function positionedModelToDocx(doc) {
   return packDocx(documentXml, media, rels);
 }
 
-/** Map a document-model `posbox` block → the `seg` shape textboxAnchor expects
- *  ({bg, parts:[{run,space}]}). A posbox is already one line, and each run's text
- *  carries its own leading space, so `space` is always false. */
-function posboxToSeg(box) {
-  const align = (box.style && box.style.align) || 'left';
-  const parts = (box.runs || [])
+/** One `posbox` line → a positioned text frame paragraph: absolute page coordinates
+ *  via `w:framePr` (so it's placed exactly, yet edits like normal body text), shaded
+ *  with the box's sampled `fill` so it masks the raster glyph beneath. Returns '' for
+ *  an empty box. */
+function framedParagraph(box) {
+  const f = box.frame || {};
+  const runsXml = (box.runs || [])
     .filter((r) => r && r.text != null && String(r.text).length)
     .map((r) => {
       const m = r.marks || {};
-      return {
-        run: {
-          text: r.text,
-          fontSize: m.fontSize || 14,
-          bold: !!m.bold,
-          italic: !!m.italic,
-          color: normHex(m.color) || '111111',
-          fontFamily: m.fontFamily || 'Arial',
-          align,
-        },
-        space: false,
-      };
-    });
-  return { bg: normHex(box.fill) || '', parts };
+      const rpr = runProps({
+        bold: m.bold, italic: m.italic, size: SZHP(m.fontSize || 14),
+        color: normHex(m.color) || '111111', font: m.fontFamily,
+      });
+      return '<w:r>' + rpr + `<w:t xml:space="preserve">${xml(String(r.text))}</w:t></w:r>`;
+    }).join('');
+  if (!runsXml) return '';
+  const align = box.style && box.style.align;
+  const jc = align === 'center' ? '<w:jc w:val="center"/>' : align === 'right' ? '<w:jc w:val="right"/>' : '';
+  const fill = normHex(box.fill);
+  const shd = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : '';
+  // hRule="exact" keeps the frame the line's height; wrap="none" lets frames overlap
+  // freely (form fields sit close together) instead of shoving each other around.
+  const framePr = `<w:framePr w:w="${TW(f.w || 0)}" w:h="${TW(f.h || 0)}" w:hRule="exact" w:wrap="none"`
+    + ` w:vAnchor="page" w:hAnchor="page" w:x="${TW(f.x || 0)}" w:y="${TW(f.y || 0)}" w:hSpace="0" w:vSpace="0"/>`;
+  return `<w:p><w:pPr>${framePr}${shd}<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>${runsXml}</w:p>`;
 }
 
 /* --------------------------- editable / hybrid --------------------------- */
