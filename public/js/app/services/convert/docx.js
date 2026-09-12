@@ -98,11 +98,16 @@ export function modelToDocx(model, opts = {}) {
  * it and type like normal text — no shape to select first, no double-click-to-edit,
  * and no object border/handles. (Floating text boxes looked identical but Word treats
  * them as drawing objects — single click selects the box, which is the "it treats it
- * as a selection not editing" complaint.) Each frame is shaded with the box's sampled
- * `fill` (`w:shd`) so it masks the glyph baked into the raster beneath; a matching
- * fill makes the frame invisible, so there is no visible "box" either.
+ * as a selection not editing" complaint.)
+ *
+ * To avoid any VISIBLE box, the baked glyph is ERASED from the page raster at export
+ * (each line's sampled `fill` painted over its area) so the frames can be fully
+ * TRANSPARENT — no `w:shd` fill and no border, so nothing shows around the text and
+ * there is no doubling. If the raster can't be edited (no canvas, e.g. Node), it
+ * falls back to opaque `w:shd`-filled frames over the original raster (a faint box in
+ * off-white areas, but never doubled text).
  */
-export function positionedModelToDocx(doc) {
+export async function positionedModelToDocx(doc) {
   const pages = doc.pages || [];
   const media = [];
   const rels = [];
@@ -131,18 +136,25 @@ export function positionedModelToDocx(doc) {
   const fallbackH = (doc.page && doc.page.height) || 1123;
 
   const list = pages.length ? pages : [{ width: fallbackW, height: fallbackH }];
+  // Erase the baked text so the overlay frames can be transparent (no visible box).
+  // One cleaned raster per page, or null for that page → keep the opaque-mask fallback.
+  const cleanBg = await erasePositionedText(list, boxesByPage);
+
   list.forEach((pg, pi) => {
     const w = pg.width || fallbackW;
     const h = pg.height || fallbackH;
+    const erased = cleanBg && cleanBg[pi];
+    const bgSrc = erased || pg.bg;
     const pageParts = [];
     // Page raster BEHIND the text (all the graphics: borders, shading, seal, photo).
-    if (pg.bg) {
-      const bgId = addImage(pg.bg);
+    if (bgSrc) {
+      const bgId = addImage(bgSrc);
       pageParts.push(`<w:p><w:r>${anchor(0, 0, w, h, z++, pictureGraphic(w, h, bgId, z), true)}</w:r></w:p>`);
     }
-    // Each line → a positioned, inline-editable text frame.
+    // Each line → a positioned, inline-editable text frame. Transparent when the
+    // raster was erased under it; otherwise opaque-shaded to mask the baked glyph.
     for (const box of (boxesByPage.get(pi) || [])) {
-      const p = framedParagraph(box);
+      const p = framedParagraph(box, !erased);
       if (p) pageParts.push(p);
     }
     const sectPr = `<w:sectPr><w:pgSz w:w="${TW(w)}" w:h="${TW(h)}"/>`
@@ -163,11 +175,58 @@ export function positionedModelToDocx(doc) {
   return packDocx(documentXml, media, rels);
 }
 
+/** Paint each line's sampled `fill` over its glyphs in the page raster, so the export
+ *  overlay frames can be transparent (no visible box, no doubling). Returns an array
+ *  of cleaned data-URLs (one per page, null where nothing could be cleaned) or null
+ *  when there's no canvas (Node) — caller then keeps the opaque-mask fallback. The
+ *  frame hugs its line (positionedImport `fs*1.15`), so a fill rect can't reach the
+ *  cell borders/rules between lines. */
+async function erasePositionedText(pages, boxesByPage) {
+  if (typeof document === 'undefined' || typeof Image === 'undefined') return null;
+  const out = [];
+  let any = false;
+  for (let pi = 0; pi < pages.length; pi += 1) {
+    const pg = pages[pi];
+    const boxes = boxesByPage.get(pi) || [];
+    if (!pg.bg || !boxes.length) { out[pi] = null; continue; }
+    try {
+      const img = await loadImage(pg.bg);
+      const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const scale = W / (pg.width || W);
+      for (const box of boxes) {
+        const fill = normHex(box.fill);
+        if (!fill) continue;
+        const f = box.frame || {};
+        ctx.fillStyle = `#${fill}`;
+        ctx.fillRect(Math.round((f.x || 0) * scale), Math.round((f.y || 0) * scale),
+          Math.round((f.w || 0) * scale), Math.round((f.h || 0) * scale));
+      }
+      out[pi] = canvas.toDataURL('image/jpeg', 0.92);
+      any = true;
+    } catch { out[pi] = null; }
+  }
+  return any ? out : null;
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = reject;
+    im.src = src;
+  });
+}
+
 /** One `posbox` line → a positioned text frame paragraph: absolute page coordinates
- *  via `w:framePr` (so it's placed exactly, yet edits like normal body text), shaded
- *  with the box's sampled `fill` so it masks the raster glyph beneath. Returns '' for
- *  an empty box. */
-function framedParagraph(box) {
+ *  via `w:framePr` (so it's placed exactly, yet edits like normal body text). With
+ *  `mask` it is shaded with the box's sampled `fill` to hide the raster glyph beneath
+ *  (used only when the raster wasn't erased); otherwise it is fully transparent — no
+ *  fill, no border — so nothing shows around the text. Returns '' for an empty box. */
+function framedParagraph(box, mask) {
   const f = box.frame || {};
   const runsXml = (box.runs || [])
     .filter((r) => r && r.text != null && String(r.text).length)
@@ -182,7 +241,7 @@ function framedParagraph(box) {
   if (!runsXml) return '';
   const align = box.style && box.style.align;
   const jc = align === 'center' ? '<w:jc w:val="center"/>' : align === 'right' ? '<w:jc w:val="right"/>' : '';
-  const fill = normHex(box.fill);
+  const fill = mask ? normHex(box.fill) : '';
   const shd = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : '';
   // hRule="exact" keeps the frame the line's height; wrap="none" lets frames overlap
   // freely (form fields sit close together) instead of shoving each other around.
