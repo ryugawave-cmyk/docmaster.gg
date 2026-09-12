@@ -14,6 +14,7 @@ import {
   createDocument, createParagraph, createRun, createListBlock,
   createImageBlock, createTableBlock, DEFAULT_MARKS, DEFAULT_PAGE,
 } from '../../model/documentModel.js';
+import { fitBoxFontToInk } from './positionedImport.js';
 
 const PT_TO_PX = 96 / 72;
 const EMU_PER_PX = 9525;                 // OOXML EMU per CSS px @96dpi
@@ -54,11 +55,15 @@ export async function docxToBlockModel(buf, title = 'Document') {
   if (isPositionedExport(body)) {
     const reconstructed = reconstructPositioned(body, files, rels, title);
     const sidecarModel = await readSidecarModel(files, dec);
-    if (sidecarModel) {
-      const merged = mergeSidecar(sidecarModel, reconstructed, title);
-      if (merged) return merged;
+    const doc = (sidecarModel && mergeSidecar(sidecarModel, reconstructed, title)) || reconstructed;
+    if (doc) {
+      // Match the editable overlay's size to the baked page image, so a DORMANT box
+      // (sidecar path — original raster kept) doesn't look smaller when revealed for
+      // editing. Enlarge-only; a no-op on the erased-raster reconstruction (no baked
+      // glyph to measure) and in Node (no canvas). Never fatal.
+      try { await fitBoxFontToInk(doc.pages || [], doc.blocks || []); } catch { /* leave sizes as-is */ }
+      return doc;
     }
-    if (reconstructed) return reconstructed;
   }
 
   // Section properties → page size / margins (twips → px). Falls back to the model

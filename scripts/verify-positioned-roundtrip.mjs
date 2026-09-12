@@ -62,6 +62,26 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><body><script type="module"
       firstBold: !!(boxes[0] && boxes[0].runs[0].marks.bold),
     };
   };
+
+  // Reveal-shrink fix: a dormant box whose MODEL font is smaller than the baked raster
+  // text must be enlarged on re-import so revealing it for editing doesn't shrink it.
+  window.runShrinkFix = async () => {
+    const c = document.createElement('canvas'); c.width = 600; c.height = 80;
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 600, 80);
+    x.fillStyle = '#111'; x.font = '26px Arial'; x.fillText('SHRINKAGE TEST LINE', 20, 44); // baked BIG
+    const bg = c.toDataURL('image/png');
+    const doc = {
+      layout: 'positioned', page: { width: 600, height: 80, margin: 0 },
+      pages: [{ bg, width: 600, height: 80 }],
+      // model font deliberately TINY (8px) vs the ~26px baked line
+      blocks: [{ type: 'posbox', page: 0, frame: { x: 20, y: 22, w: 400, h: 30 }, style: { align: 'left' }, fill: '#ffffff',
+        runs: [{ text: 'SHRINKAGE TEST LINE', marks: { fontSize: 8, color: '#111111', fontFamily: 'Arial' } }] }],
+    };
+    const buf = await (await blockModelToDocx(doc)).arrayBuffer();
+    const re = await docxToBlockModel(buf, 'shrink');
+    const box = (re.blocks || []).find(b => b.type === 'posbox');
+    return { size: box && box.runs[0].marks.fontSize };
+  };
 </script></body>`;
 
 const server = http.createServer((req, res) => {
@@ -101,6 +121,10 @@ try {
   check('fills preserved verbatim (dormant masking intact)', r.fills[0] === '#ffffff' && r.fills[1] === '#eeeeee');
   check('bold survived the round-trip', r.firstBold === true);
   check('frame position is EXACT (sidecar, no rounding)', r.firstFrame && r.firstFrame.x === 100 && r.firstFrame.y === 80);
+
+  // Reveal-shrink fix: re-import enlarges an under-sized dormant box to match the baked text.
+  const sf = await page.evaluate(() => window.runShrinkFix());
+  check('re-import enlarges under-sized box to match baked (no reveal shrink)', sf.size > 10);
 } catch (e) {
   console.log('SKIPPED:', String(e.message || e).split('\n')[0]);
   if (browser) await browser.close();
