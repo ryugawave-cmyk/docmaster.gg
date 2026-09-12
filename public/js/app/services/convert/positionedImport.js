@@ -276,13 +276,16 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
  *
  * The SAME string is measured on both sides (baked ink vs the substitute's
  * actualBoundingBox), so ascenders/descenders/caps line up and the ratio is a true
- * size correction. Clamped so a mis-detected border/neighbour can't balloon or
- * collapse a line; ink that fills the whole box (a rule/box border, not text) is
- * ignored. Browser-only (canvas); any failure (e.g. Node, tainted raster) leaves
- * every size untouched. `frame.h` is deliberately NOT grown — it also sizes the
- * opaque mask fill, and a taller fill would reach down over the next baked line;
- * line-height:1 + overflow:visible shows the enlarged glyph in full regardless. */
-export const FIT_LO = 0.8;  // clamp: never collapse a line below 80%
+ * size correction. It is ENLARGE-ONLY (FIT_LO 1.0): the user's rule is that a
+ * revealed line must never look smaller than the page image, so a below-1 ratio
+ * (which a mis-measure or a genuinely-small embedded font could produce) just leaves
+ * the line at its natural size — it never shrinks. Capped at FIT_HI so a bad measure
+ * can't balloon a line. Browser-only (canvas); any failure (e.g. Node, tainted
+ * raster) leaves every size untouched. `frame.h` is deliberately NOT grown — it also
+ * sizes the opaque mask fill, and a taller fill would reach down over the next baked
+ * line; line-height:1 + overflow:visible shows the enlarged glyph in full regardless. */
+export const FIT_LO = 1.0;  // ENLARGE-ONLY: a revealed line must never shrink vs the
+                            // page image (a below-1 measurement just leaves it as-is)
 export const FIT_HI = 1.6;  // clamp: never balloon a line above 160%
 export const FIT_EPS = 0.03; // ignore sub-3% corrections (measurement noise)
 
@@ -298,10 +301,15 @@ function lumFromHex(hex) {
  *  can be told apart from the background. `bgLum` is the box's sampled background
  *  luminance (the box hugs its line, so the text fills most of the region and a
  *  median can't find the paper — the caller passes the sampled fill instead).
- *  `scale` = raster px per page px. A row counts as TEXT only when its ink fraction
- *  is in [0.05, 0.92]: below that is a stray border pixel / margin, above that is a
- *  solid rule or a filled/complex background — so bars and boxes don't masquerade as
- *  a line height. Pure — unit-testable. */
+ *  `scale` = raster px per page px.
+ *
+ *  A row is "inked" when >=5% of it differs from the background (a lower gate that
+ *  ignores stray border/margin pixels but — unlike an UPPER gate — does NOT throw
+ *  away the dense interior rows of a bold line, which was under-measuring headings
+ *  and shrinking them). The line height = the TALLEST CONTIGUOUS run of inked rows,
+ *  so a thin horizontal rule above/below the text (a separate short run) is ignored
+ *  while the text band wins. Ink that fills the entire region (a solid cell/fill, not
+ *  a line we can measure) → null. Pure — unit-testable. */
 export function measureInkHeight(data, W, H, f, scale, bgLum) {
   const x0 = Math.max(0, Math.round(f.x * scale));
   const y0 = Math.max(0, Math.round(f.y * scale));
@@ -318,15 +326,21 @@ export function measureInkHeight(data, W, H, f, scale, bgLum) {
     s.sort((a, b) => a - b); bg = s[s.length >> 1];
   }
   const THRESH = 60;                          // luminance delta that counts as ink
-  let first = -1, last = -1;
+  let bestLen = 0, curStart = -1, firstAny = -1, lastAny = -1;
   for (let y = y0; y < y1; y += 1) {
     let n = 0;
     for (let x = x0; x < x1; x += 1) if (Math.abs(lum(x, y) - bg) > THRESH) n += 1;
-    const frac = n / wpx;
-    if (frac >= 0.05 && frac <= 0.92) { if (first < 0) first = y; last = y; } // a text row
+    if (n / wpx >= 0.05) {                     // an inked row
+      if (curStart < 0) curStart = y;
+      if (y - curStart + 1 > bestLen) bestLen = y - curStart + 1;
+      if (firstAny < 0) firstAny = y; lastAny = y;
+    } else curStart = -1;                       // background row ends the current run
   }
-  if (first < 0) return null;                 // no text-like row → leave the size alone
-  return (last - first + 1) / scale;
+  if (bestLen <= 0) return null;               // no ink at all → leave the size alone
+  // Ink covers the whole region with no background gap → a solid fill, not a line of
+  // text we can size against → skip rather than fit to a filled cell.
+  if (firstAny <= y0 && lastAny >= y1 - 1 && bestLen >= (y1 - y0)) return null;
+  return bestLen / scale;
 }
 
 export async function fitBoxFontToInk(pages, blocks) {

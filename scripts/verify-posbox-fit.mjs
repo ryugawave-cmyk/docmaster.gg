@@ -12,12 +12,17 @@
  * measures the baked line's real pixel height in the raster and scales the box font
  * so the substitute inks the same height. This guards:
  *   1. measureInkHeight finds a text band's height and ignores the background,
- *   2. ink that fills the whole box (a border/rule) is rejected (null),
- *   3. a blank region is rejected (null),
- *   4. a substitute that inks SHORTER than the baked glyph is enlarged to match,
- *   5. the scale is clamped at FIT_HI (a mis-detected band can't balloon a line),
- *   6. a near-match (< FIT_EPS) is left unchanged (no pointless reflow),
- *   7. no raster / no canvas (e.g. Node) → every size untouched (fail-safe).
+ *   2. a DENSE (full-width) bold band is still measured in full (no upper gate) —
+ *      this is the heading-shrink regression: an upper gate dropped its interior
+ *      rows and under-measured it,
+ *   3. a thin rule above the text is ignored (tallest contiguous run wins),
+ *   4. ink filling the whole region (a solid cell) is rejected (null),
+ *   5. a blank region is rejected (null),
+ *   6. a substitute that inks SHORTER than the baked glyph is enlarged to match,
+ *   7. ENLARGE-ONLY: a taller substitute (ratio < 1) is NOT shrunk (stays as-is),
+ *   8. the scale is clamped at FIT_HI (a mis-detected band can't balloon a line),
+ *   9. a near-match (< FIT_EPS) is left unchanged (no pointless reflow),
+ *  10. no raster / no canvas (e.g. Node) → every size untouched (fail-safe).
  *
  * Drives the REAL shipping functions: measureInkHeight is pure (synthetic pixels);
  * fitBoxFontToInk runs against a stub canvas/Image whose pixels and text metrics are
@@ -65,37 +70,50 @@ function check(name, cond) {
   failures += 1;
 }
 
-// White raster W×H with a black band on rows [ry0, ry1). `cov` = fraction of the
-// width inked, so a text-like band (partial coverage) can be told from a solid rule.
-function raster(W, H, ry0, ry1, cov = 0.5) {
+// White raster W×H with black band(s). Each band = [ry0, ry1) inked at `cov` fraction
+// of the width. Accepts extra bands so a rule + a text line can share a region.
+function raster(W, H, bands) {
   const d = new Uint8ClampedArray(W * H * 4); d.fill(255);
-  const xe = 2 + Math.round((W - 4) * cov);
-  for (let y = ry0; y < ry1; y += 1) for (let x = 2; x < xe; x += 1) {
-    const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = 0; d[i + 3] = 255;
+  for (const [ry0, ry1, cov] of bands) {
+    const xe = 2 + Math.round((W - 4) * cov);
+    for (let y = ry0; y < ry1; y += 1) for (let x = 2; x < xe; x += 1) {
+      const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = 0; d[i + 3] = 255;
+    }
   }
   return d;
 }
 const WHITE = 255; // bg luminance passed to measureInkHeight (the box's sampled fill)
+const F = { x: 0, y: 0, w: 100, h: 40 };
 
-/* 1. measureInkHeight: a 24px-tall text-like band on a 100×40 raster (scale 1) → 24. */
+/* 1. A 24px-tall text-like band (50% width) on a 100×40 raster (scale 1) → 24. */
 {
-  const d = raster(100, 40, 8, 32); // rows 8..31 inked at 50% width = 24 rows
-  const h = measureInkHeight(d, 100, 40, { x: 0, y: 0, w: 100, h: 40 }, 1, WHITE);
-  check('measureInkHeight reports the band height', h === 24);
+  const d = raster(100, 40, [[8, 32, 0.5]]); // rows 8..31 = 24 rows
+  check('measureInkHeight reports the band height', measureInkHeight(d, 100, 40, F, 1, WHITE) === 24);
 }
 
-/* 2. A solid full-width bar (a rule/border) → null (not a line of text). */
+/* 2. DENSE full-width bold band (rows 8..32, 100% width) is still measured in full —
+   the heading-shrink regression: an upper fraction gate dropped these rows. */
 {
-  const d = raster(100, 40, 8, 32, 1.0); // 100% width = solid bar
-  const h = measureInkHeight(d, 100, 40, { x: 0, y: 0, w: 100, h: 40 }, 1, WHITE);
-  check('solid full-width bar rejected', h === null);
+  const d = raster(100, 40, [[8, 32, 1.0]]);
+  check('dense full-width band measured in full (no upper gate)', measureInkHeight(d, 100, 40, F, 1, WHITE) === 24);
 }
 
-/* 3. Blank region → null. */
+/* 3. A thin rule (rows 2..4) above a taller text band (rows 12..30) → text wins. */
 {
-  const d = raster(100, 40, 0, 0); // no ink
-  const h = measureInkHeight(d, 100, 40, { x: 0, y: 0, w: 100, h: 40 }, 1, WHITE);
-  check('blank region rejected', h === null);
+  const d = raster(100, 40, [[2, 4, 1.0], [12, 30, 0.5]]); // rule 2px, text 18px
+  check('thin rule ignored, tallest run (text) wins', measureInkHeight(d, 100, 40, F, 1, WHITE) === 18);
+}
+
+/* 4. Ink filling the WHOLE region (a solid cell) → null. */
+{
+  const d = raster(100, 40, [[0, 40, 1.0]]);
+  check('full-region solid fill rejected', measureInkHeight(d, 100, 40, F, 1, WHITE) === null);
+}
+
+/* 5. Blank region → null. */
+{
+  const d = raster(100, 40, []);
+  check('blank region rejected', measureInkHeight(d, 100, 40, F, 1, WHITE) === null);
 }
 
 // A one-run box; frame maps 1:1 to the raster (scale 1).
@@ -110,32 +128,41 @@ function box(overrides = {}) {
 }
 const page = () => ({ bg: 'data:stub', width: RW, height: RH });
 
-/* 4. Substitute inks SHORTER than baked → enlarge to match (baked 24, dom 20 → 1.2×). */
+/* 6. Substitute inks SHORTER than baked → enlarge to match (baked 24, dom 20 → 1.2×). */
 {
-  RW = 100; RH = 40; PIXELS = raster(RW, RH, 8, 32); DOM_H = 20; // baked band = 24
+  RW = 100; RH = 40; PIXELS = raster(RW, RH, [[8, 32, 0.5]]); DOM_H = 20; // baked band = 24
   const b = box();
   await fitBoxFontToInk([page()], [b]);
   check('shorter substitute enlarged to the baked height', b.runs[0].marks.fontSize === Math.round(20 * (24 / 20)));
 }
 
-/* 5. Huge baked band → scale clamped at FIT_HI. */
+/* 7. ENLARGE-ONLY: substitute inks TALLER than baked (ratio < 1) → NOT shrunk. This
+   is the reported bug — dense headings were being scaled below 1 and shrank. */
 {
-  RW = 100; RH = 80; PIXELS = raster(RW, RH, 4, 76); DOM_H = 20; // baked band ≈ 72 → 3.6×
+  RW = 100; RH = 40; PIXELS = raster(RW, RH, [[12, 28, 0.5]]); DOM_H = 20; // baked band = 16 → 0.8×
+  const b = box();
+  await fitBoxFontToInk([page()], [b]);
+  check('taller substitute is NOT shrunk (enlarge-only)', b.runs[0].marks.fontSize === 20);
+}
+
+/* 8. Huge baked band → scale clamped at FIT_HI. */
+{
+  RW = 100; RH = 80; PIXELS = raster(RW, RH, [[4, 76, 0.5]]); DOM_H = 20; // baked band = 72 → 3.6×
   const b = box({ frame: { x: 0, y: 0, w: 100, h: 80 } });
   await fitBoxFontToInk([page()], [b]);
   check('over-tall band is clamped at FIT_HI', b.runs[0].marks.fontSize === Math.round(20 * FIT_HI));
 }
 
-/* 6. Baked height ≈ substitute height (within FIT_EPS) → unchanged. */
+/* 9. Baked height ≈ substitute height (within FIT_EPS) → unchanged. */
 {
-  RW = 100; RH = 40; PIXELS = raster(RW, RH, 8, 28); DOM_H = 20; // baked band = 20
+  RW = 100; RH = 40; PIXELS = raster(RW, RH, [[8, 28, 0.5]]); DOM_H = 20; // baked band = 20
   check('sanity: 20 vs 20 is within FIT_EPS', Math.abs(20 / 20 - 1) < FIT_EPS);
   const b = box();
   await fitBoxFontToInk([page()], [b]);
   check('near-match left unchanged', b.runs[0].marks.fontSize === 20);
 }
 
-/* 7. Fail-safe: no page raster → no throw, sizes untouched. */
+/* 10. Fail-safe: no page raster → no throw, sizes untouched. */
 {
   const b = box();
   let threw = false;
