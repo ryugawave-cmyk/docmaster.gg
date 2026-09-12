@@ -65,7 +65,9 @@ function box(overrides = {}) {
   fitBoxFontToWidth([b]);
   const expected = Math.round(20 * FIT_MAX); // 1.25 exceeds the 1.22 cap
   check('narrow substitute enlarged and capped at FIT_MAX', b.runs[0].marks.fontSize === expected);
-  check('capped growth grows the box height', b.frame.h === Math.round(expected * 1.3));
+  // frame.h must NOT grow — the box height sizes the opaque mask fill, and a taller
+  // fill would reach down over the next baked line and clip it ("sink").
+  check('enlarging does NOT grow the box height (fill stays off the next line)', b.frame.h === 26);
 }
 
 // 2. Narrow substitute within the cap (185px → 200/185 ≈ 1.081) → exact scale.

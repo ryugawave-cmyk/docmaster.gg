@@ -623,9 +623,12 @@
   outline-offset: -1px;
   transition: outline-color .12s, background-color .12s;
 }
+/* No hover box on positioned text: the page image already shows exactly where the
+   text is, so a blue outline/tint just reads as a stray rectangle over the page. The
+   text cursor (cursor:text) is the only affordance; clicking reveals + edits. */
 .doc-page.is-positioned:not(.is-readonly) .doc-posbox:hover {
-  outline-color: rgba(79, 70, 229, .28);
-  background: rgba(79, 70, 229, .04);
+  outline-color: transparent;
+  background: transparent;
 }
 /* No focus box: a revealed positioned box shows only its (background-matching) fill +
    text, so you edit in place. The blinking caret is the "you're editing here" cue —

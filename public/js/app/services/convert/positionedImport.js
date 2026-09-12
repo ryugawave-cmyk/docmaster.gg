@@ -160,7 +160,11 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
       // Box extent: the segment's real span, padded a little so text isn't clipped,
       // and at least one line tall. Page-relative — the editor adds the page offset.
       const w = Math.round(Math.max(seg.right - seg.x, fs * 0.5) + fs * 0.6);
-      const h = Math.round(Math.max(seg.h || 0, fs * 1.3));
+      // Hug the line's real height (seg.h ≈ fontSize·1.08). This box's opaque mask
+      // fill is painted over the raster when the box is revealed, so anything taller
+      // than the line reaches DOWN over the top of the next baked line and clips it
+      // ("the line below sinks when I click this one"). Keep it just tall enough.
+      const h = Math.round(Math.max(seg.h || 0, fs * 1.15));
       // A posbox is ONE PDF line. The editor's substitute font is a little wider than
       // the PDF's, so a multi-word line in a NARROW box (a label/value inside a table
       // cell) would wrap to a 2nd visual line that lands on the baked line below it —
@@ -295,16 +299,13 @@ export function fitBoxFontToWidth(blocks) {
     if (!(measured > 0) || measured >= tw) continue; // substitute already ≥ original: don't shrink
     const scale = Math.min(tw / measured, FIT_MAX);
     if (scale < FIT_MIN) continue;
-    let maxFs = 0;
     for (const r of runs) {
       const cur = (r.marks && r.marks.fontSize) || fs;
-      const next = Math.max(5, Math.round(cur * scale));
-      if (r.marks) r.marks.fontSize = next;
-      if (next > maxFs) maxFs = next;
+      if (r.marks) r.marks.fontSize = Math.max(5, Math.round(cur * scale));
     }
-    // Grow the box so the enlarged line (line-height:1 → ~fontSize tall) isn't
-    // clipped by its own min-height; x/y and width are untouched.
-    if (b.frame) b.frame.h = Math.max(b.frame.h || 0, Math.round(maxFs * 1.3));
+    // Deliberately DON'T grow frame.h: the box height also sizes the opaque mask
+    // fill, and a taller fill reaches down over the next baked line and clips it.
+    // line-height:1 + overflow:visible means the enlarged glyph still shows in full.
   }
 }
 
