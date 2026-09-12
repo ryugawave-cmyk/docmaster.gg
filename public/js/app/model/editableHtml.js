@@ -66,7 +66,11 @@ function posboxToEl(block) {
   const box = document.createElement('div');
   // Dormant by default: hidden so the original page image shows through pixel-exact;
   // the editor reveals it on focus and keeps it revealed once edited (documentEditor).
-  box.className = 'doc-posbox doc-posbox--dormant';
+  // `revealed` boxes stay visible at rest — used when the page raster has its text
+  // ERASED (our re-imported positioned Word export), so there's nothing baked to show
+  // and the editable text must render at rest.
+  box.className = block.revealed ? 'doc-posbox' : 'doc-posbox doc-posbox--dormant';
+  if (block.revealed) box.dataset.revealed = '1';
   box.dataset.blockId = block.id;
   const f = block.frame || {};
   box.dataset.page = String(block.page || 0);
@@ -324,6 +328,7 @@ function readPosbox(el) {
   if (el.dataset.fill) block.fill = el.dataset.fill;
   if (el.dataset.opacity != null && el.dataset.opacity !== '') block.opacity = Math.max(0, Math.min(1, parseFloat(el.dataset.opacity)));
   if (el.dataset.nowrap === '1') block.nowrap = true;
+  if (el.dataset.revealed === '1') block.revealed = true; // always-visible (erased-raster re-import)
   return block;
 }
 

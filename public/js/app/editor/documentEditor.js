@@ -1261,7 +1261,8 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   });
   page.addEventListener('focusout', (e) => {
     const box = e.target && e.target.closest && e.target.closest('.doc-posbox');
-    if (box && box.dataset.edited !== '1') box.classList.add('doc-posbox--dormant');
+    // `revealed` boxes (erased-raster re-import) are always visible — never re-dorm them.
+    if (box && box.dataset.edited !== '1' && box.dataset.revealed !== '1') box.classList.add('doc-posbox--dormant');
   });
 
   // Click an image to select it (show resize handles); click anywhere else to

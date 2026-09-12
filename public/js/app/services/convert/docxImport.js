@@ -41,6 +41,16 @@ export async function docxToBlockModel(buf, title = 'Document') {
   const body = xml.getElementsByTagName('w:body')[0];
   if (!body) return createDocument({ title, source: 'docx' });
 
+  // Our own PDF→Doc "positioned" Word export (docx.js positionedModelToDocx) encodes
+  // each line as a page-anchored text FRAME (w:framePr) over a full-page behindDoc
+  // raster. The generic flow importer below would stack those frames into a column
+  // and expose the text-erased raster (the broken re-import). Detect and rebuild the
+  // positioned model instead — the inverse of the exporter.
+  if (isPositionedExport(body)) {
+    const positioned = reconstructPositioned(body, files, rels, title);
+    if (positioned) return positioned;
+  }
+
   // Section properties → page size / margins (twips → px). Falls back to the model
   // default (A4) when absent, so a Letter document with 1" margins reproduces its
   // real content width — which drives wrapping and therefore pagination.
@@ -133,6 +143,95 @@ export async function docxToBlockModel(buf, title = 'Document') {
     page,
     blocks: blocks.length ? blocks : [createParagraph()],
   });
+}
+
+/* ---------------------- positioned (exact-layout) re-import ---------------- */
+
+/** True when this .docx is our positioned export: at least one page-anchored text
+ *  frame (w:framePr) AND a full-page behind-text raster (behindDoc anchor). Generic
+ *  Word documents essentially never combine both, so this won't misfire on them. */
+function isPositionedExport(body) {
+  if (!body.getElementsByTagName('w:framePr').length) return false;
+  for (const a of Array.from(body.getElementsByTagName('wp:anchor'))) {
+    if (a.getAttribute('behindDoc') === '1') return true;
+  }
+  return false;
+}
+
+let posSeq = 0;
+/**
+ * Rebuild the positioned (exact-layout) document model from our own export — the
+ * inverse of docx.js `positionedModelToDocx`. Each Word section is one page: its
+ * behindDoc drawing → the page raster (`pages[i].bg`), and every `w:framePr`
+ * paragraph → a `posbox` block at its absolute coordinates. Boxes are `revealed`
+ * (always visible, transparent fill) because the exported raster has its text erased
+ * — there's nothing baked to reveal, so the frames must show at rest.
+ */
+function reconstructPositioned(body, files, rels, title) {
+  const pages = [];
+  const blocks = [];
+  let pageIndex = 0;
+  let curBg = null, curW = null, curH = null, curFrames = [];
+  const fw = DEFAULT_PAGE.width, fh = DEFAULT_PAGE.height;
+
+  const finalize = (sectPr) => {
+    let w = curW, h = curH;
+    const pgSz = sectPr ? child(sectPr, 'pgSz') : null;
+    if (pgSz) {
+      const pw = attr(pgSz, 'w:w'), ph = attr(pgSz, 'w:h');
+      if (pw) w = Math.round(TWIP_TO_PX(pw));
+      if (ph) h = Math.round(TWIP_TO_PX(ph));
+    }
+    if (curBg == null && !curFrames.length) { if (w) curW = w; if (h) curH = h; return; }
+    pages.push({ bg: curBg, width: w || fw, height: h || fh });
+    for (const fr of curFrames) { fr.page = pageIndex; blocks.push(fr); }
+    pageIndex += 1; curBg = null; curFrames = []; curW = w; curH = h;
+  };
+
+  for (const node of Array.from(body.children)) {
+    const tag = local(node.tagName);
+    if (tag === 'sectPr') { finalize(node); continue; }   // final page's body-level section
+    if (tag !== 'p') continue;
+    const pPr = child(node, 'pPr');
+    const framePr = pPr ? child(pPr, 'framePr') : null;
+    const sectPr = pPr ? child(pPr, 'sectPr') : null;
+    if (framePr) {
+      const frame = {
+        x: Math.max(0, Math.round(TWIP_TO_PX(attr(framePr, 'w:x') || '0'))),
+        y: Math.max(0, Math.round(TWIP_TO_PX(attr(framePr, 'w:y') || '0'))),
+        w: Math.max(0, Math.round(TWIP_TO_PX(attr(framePr, 'w:w') || '0'))),
+        h: Math.max(0, Math.round(TWIP_TO_PX(attr(framePr, 'w:h') || '0'))),
+      };
+      const jc = attr(child(pPr, 'jc'), 'w:val');
+      const align = jc === 'center' ? 'center' : jc === 'right' ? 'right' : 'left';
+      const runs = readRuns(node, files, rels);
+      curFrames.push({
+        id: `pos-${(++posSeq).toString(36)}`,
+        type: 'posbox', page: 0, frame, style: { align },
+        fill: '', revealed: true,
+        runs: runs.length ? runs : [createRun('')],
+      });
+      continue;
+    }
+    if (sectPr) { finalize(sectPr); continue; }            // section-break carrier ends a page
+    // Otherwise: the page-background raster paragraph (a behindDoc drawing).
+    const draw = node.getElementsByTagName('w:drawing')[0];
+    if (draw) {
+      const blk = drawingToBlock(draw, files, rels, { width: 0, margin: 0 });
+      if (blk && blk.src) { curBg = blk.src; if (blk.width) curW = blk.width; if (blk.height) curH = blk.height; }
+    }
+  }
+  finalize(null); // trailing page if the body didn't end on a section child
+
+  if (!pages.length && !blocks.length) return null; // not actually our export → flow import
+  const doc = createDocument({
+    title, source: 'docx',
+    page: { width: (pages[0] && pages[0].width) || fw, height: (pages[0] && pages[0].height) || fh, margin: 0 },
+    blocks: blocks.length ? blocks : undefined,
+  });
+  doc.layout = 'positioned';
+  doc.pages = pages;
+  return doc;
 }
 
 /* ------------------------- styles / section setup ------------------------- */
