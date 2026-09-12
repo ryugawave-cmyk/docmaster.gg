@@ -18,7 +18,8 @@
     "verify:font-weight": "node scripts/verify-font-weight.mjs",
     "verify:graphic-regions": "node scripts/verify-graphic-regions.mjs",
     "verify:posbox-click": "node scripts/verify-posbox-click.mjs",
-    "test": "node scripts/verify-font-weight.mjs && node scripts/verify-graphic-regions.mjs && node scripts/verify-posbox-click.mjs && node scripts/verify-delete.js"
+    "verify:posbox-fit": "node scripts/verify-posbox-fit.mjs",
+    "test": "node scripts/verify-font-weight.mjs && node scripts/verify-graphic-regions.mjs && node scripts/verify-posbox-click.mjs && node scripts/verify-posbox-fit.mjs && node scripts/verify-delete.js"
   },
   "keywords": [
     "docmaster",

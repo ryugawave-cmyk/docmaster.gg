@@ -181,11 +181,20 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
         // focused/edited — where it covers the original glyph baked beneath so the
         // editable text replaces it cleanly.
         fill: seg.bg || '#ffffff',
-        // scratch data for heading inference (removed below)
+        // scratch data (removed below): heading inference + the original PDF text
+        // extent (`_tw`), used to width-fit the substitute font so a revealed box
+        // does not look smaller than the baked glyph it covers.
         _size: Math.round(fs), _bold: bold, _len: text.trim().length,
+        _tw: Math.round(Math.max(0, seg.right - seg.x)),
       });
     }
   });
+
+  // Match each revealed overlay's apparent size to the baked original (fixes "text
+  // shrinks when I click it"). The dormant model masks the baked glyph and re-draws
+  // the line in a substitute font, which is usually a little NARROWER than the PDF's
+  // embedded font, so a revealed line looks smaller than the page image it replaced.
+  fitBoxFontToWidth(blocks);
 
   // Transparent-box masking: make each overlay box show ONLY its text over the page
   // image (no opaque rectangle hiding the artwork). Where the line's surround is
@@ -230,7 +239,7 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
       else if (ratio >= 1.12 || (b._bold && ratio >= 1.02)) level = 3;
     }
     if (level) b.heading = level;
-    delete b._size; delete b._bold; delete b._len;
+    delete b._size; delete b._bold; delete b._len; delete b._tw;
   }
 
   // Uniform page size for the editor's sheets: use the first page's native size
@@ -248,6 +257,55 @@ export async function pdfModelToPositionedDoc(model, name = 'Document', opts = {
   doc.layout = 'positioned';
   doc.pages = pages;
   return doc;
+}
+
+/* ------------------------------ width-fit overlay ------------------------------
+ * Keep a revealed box the same apparent size as the baked page image it covers.
+ *
+ * In the dormant model the page raster keeps the ORIGINAL glyphs; a box is hidden
+ * until clicked, then it paints its sampled fill over the baked glyph and re-draws
+ * the line in a substitute font (Arial/Inter). That substitute is usually a little
+ * NARROWER than the PDF's embedded font, so revealing a field visibly shrinks it.
+ *
+ * For each box, measure the re-drawn text and, if it is narrower than the original
+ * PDF run (`_tw`), scale the font up until it spans the same width — so revealing a
+ * field does not change its size. ENLARGE-ONLY (never shrinks a line below its
+ * current size, so this can't introduce a NEW shrink) and CAPPED (a mis-measure or
+ * a letter-spaced heading can't balloon). Browser-only (canvas measureText); any
+ * failure (e.g. Node) leaves every size untouched. */
+export const FIT_MIN = 1.03; // ignore sub-3% gaps (measurement noise; not worth a reflow)
+export const FIT_MAX = 1.22; // cap growth so tracking / a mis-measure can't balloon a line
+export function fitBoxFontToWidth(blocks) {
+  let ctx;
+  try { ctx = document.createElement('canvas').getContext('2d'); } catch { return; }
+  if (!ctx || typeof ctx.measureText !== 'function') return;
+  for (const b of blocks) {
+    const tw = b._tw; // original PDF text extent, px
+    const runs = b.runs || [];
+    if (!tw || tw < 4 || !runs.length) continue;
+    const text = runs.map((r) => r.text || '').join('');
+    if (text.replace(/\s/g, '').length < 2) continue; // too little to measure reliably
+    const m0 = runs[0].marks || {};
+    const fs = m0.fontSize || 14;
+    const family = m0.fontFamily || 'Arial, Helvetica, sans-serif';
+    // Measure with the SAME face/weight/style the editor renders (editableHtml), so
+    // the measured width matches what the user will actually see on reveal.
+    ctx.font = `${m0.italic ? 'italic ' : ''}${m0.bold ? '700' : '400'} ${fs}px ${family}`;
+    const measured = ctx.measureText(text).width;
+    if (!(measured > 0) || measured >= tw) continue; // substitute already ≥ original: don't shrink
+    const scale = Math.min(tw / measured, FIT_MAX);
+    if (scale < FIT_MIN) continue;
+    let maxFs = 0;
+    for (const r of runs) {
+      const cur = (r.marks && r.marks.fontSize) || fs;
+      const next = Math.max(5, Math.round(cur * scale));
+      if (r.marks) r.marks.fontSize = next;
+      if (next > maxFs) maxFs = next;
+    }
+    // Grow the box so the enlarged line (line-height:1 → ~fontSize tall) isn't
+    // clipped by its own min-height; x/y and width are untouched.
+    if (b.frame) b.frame.h = Math.max(b.frame.h || 0, Math.round(maxFs * 1.3));
+  }
 }
 
 /* -------------------------- local-background sampling --------------------------
