@@ -304,17 +304,38 @@ export async function blockModelToDocx(doc, { zip = zipBlob, editable = false } 
     return (runs && runs.length ? runs : [{ text: '' }]).map((r) => (r.field ? fieldRunXml(r) : runXml(r))).join('');
   }
 
+  // Paragraph spacing / line-height / indent → OOXML, so the exported doc RE-IMPORTS
+  // with the same vertical rhythm (and therefore the same pagination). Without this the
+  // model's spacing is dropped and re-import falls back to the editor defaults (10px
+  // after, 1.4 line), inflating every paragraph and pushing content onto extra pages.
+  // Emit a value whenever it is defined (0 included — "no space" is meaningful).
+  const TWP = (px) => Math.max(0, Math.round(px * PX_TO_PT * 20)); // px → twips
+  function spacingXml(st) {
+    if (!st) return '';
+    let sp = '';
+    if (st.spaceBefore != null) sp += ` w:before="${TWP(st.spaceBefore)}"`;
+    if (st.spaceAfter != null) sp += ` w:after="${TWP(st.spaceAfter)}"`;
+    if (st.lineHeightPx != null) sp += ` w:line="${TWP(st.lineHeightPx)}" w:lineRule="atLeast"`;
+    else if (st.lineHeight != null) sp += ` w:line="${Math.round(st.lineHeight * 240)}" w:lineRule="auto"`;
+    let out = sp ? `<w:spacing${sp}/>` : '';
+    if (st.indentLeft) out += `<w:ind w:left="${TWP(st.indentLeft)}"/>`;
+    return out;
+  }
+
   function paraXml(block) {
     const style = block.tag && /^h[1-3]$/.test(block.tag) ? `<w:pStyle w:val="Heading${block.tag[1]}"/>` : '';
     const align = jc(block.style && block.style.align);
-    const pPr = style || align ? `<w:pPr>${style}${align}</w:pPr>` : '';
+    const sp = spacingXml(block.style);
+    const inner = `${style}${align}${sp}`;
+    const pPr = inner ? `<w:pPr>${inner}</w:pPr>` : '';
     return `<w:p>${pPr}${runsXml(block.runs)}</w:p>`;
   }
 
   function listXml(block) {
     const numId = block.ordered ? 2 : 1;
+    const sp = spacingXml(block.style);
     return (block.items || []).map((it) =>
-      `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr></w:pPr>${runsXml(it.runs)}</w:p>`
+      `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr>${sp}</w:pPr>${runsXml(it.runs)}</w:p>`
     ).join('');
   }
 
@@ -484,14 +505,21 @@ export async function blockModelToDocx(doc, { zip = zipBlob, editable = false } 
 
   const pageW = Math.round((doc.page?.width || 816) * PX_TO_PT * 20);   // twips
   const pageH = Math.round((doc.page?.height || 1056) * PX_TO_PT * 20);
-  const margin = Math.round((doc.page?.margin || 72) * PX_TO_PT * 20);
+  // Emit ALL FOUR margins (top/right/bottom/left) from the model's per-side margins so
+  // the exported doc re-imports with the SAME printable area — the editor paginates on
+  // it, so collapsing them to one value (as before) shifted content height and changed
+  // the page count on round-trip. Fall back to the single `margin` per side.
+  const m1 = doc.page?.margin ?? 72;
+  const pm = doc.page?.margins || {};
+  const marTw = (v) => Math.round((v ?? m1) * PX_TO_PT * 20);
+  const mTop = marTw(pm.top), mRight = marTw(pm.right), mBottom = marTw(pm.bottom), mLeft = marTw(pm.left);
   const headerTw = Math.round(headerCfg.distance * PX_TO_PT * 20);
   const footerTw = Math.round(footerCfg.distance * PX_TO_PT * 20);
   const titlePg = (headerCfg.differentFirst || footerCfg.differentFirst) ? '<w:titlePg/>' : '';
   const evenOdd = headerCfg.differentOddEven || footerCfg.differentOddEven;
   // sectPr child order matters: references first, then pgSz/pgMar, titlePg near the end.
   const sectPr = `<w:sectPr>${hfRefs.join('')}<w:pgSz w:w="${pageW}" w:h="${pageH}"/>` +
-    `<w:pgMar w:top="${margin}" w:right="${margin}" w:bottom="${margin}" w:left="${margin}" w:header="${headerTw}" w:footer="${footerTw}" w:gutter="0"/>${titlePg}</w:sectPr>`;
+    `<w:pgMar w:top="${mTop}" w:right="${mRight}" w:bottom="${mBottom}" w:left="${mLeft}" w:header="${headerTw}" w:footer="${footerTw}" w:gutter="0"/>${titlePg}</w:sectPr>`;
 
   const documentXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
