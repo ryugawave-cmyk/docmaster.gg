@@ -130,6 +130,7 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   const redoStack = [];
   let inputTimer = 0;
   let selTimer = 0;
+  let composing = false; // an IME composition is in progress (pauses the splitter)
   let endEditing = null; // keyboard editing-session closer (suspends workspace keys)
   let imgSel = null; // currently selected image <figure> (shows resize handles)
   let lastCaretBlock = null; // last top-level block the caret sat in (for inserts)
@@ -244,6 +245,9 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     // Positioned (exact-layout) documents don't flow: each element keeps its PDF
     // coordinates on fixed sheets. Lay them out directly and skip the flow engine.
     if (base.layout === 'positioned') { layoutPositioned(); return; }
+    // Hold off flow reflow (which normalises/splits text nodes) while an IME
+    // composition is active — it would abort the composition. Re-runs on end.
+    if (composing) return;
     const p = base.page;
     const PAGE_H = p.height;
     const PAGE_W = p.width;
@@ -252,9 +256,13 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     const usable = PAGE_H - m.top - m.bottom; // content height available per page
     const ctx = { stride, m, PAGE_H, usable };
 
+    // Remember the caret before any DOM surgery (paragraph splitting / normalise),
+    // which would otherwise move it. Only used when line surgery actually happens.
+    const savedCaret = composing ? null : saveCaret();
+
     // Clear previous breaks (block spacers + in-table row/header artifacts) before
     // measuring the natural flow, so measurements reflect real content only.
-    clearPaginationArtifacts();
+    const removedLineSpacers = clearPaginationArtifacts();
 
     // Push the first page's body down by its header reserve so a tall running head
     // never overlaps the opening block (pages 2+ get this via their break spacers).
@@ -308,6 +316,23 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
         }
       }
 
+      // A flowing text block (paragraph/heading) that overflows the page:
+      //   • if it fits wholly on a fresh page, push the WHOLE block down (no mid-
+      //     paragraph break — cleaner, and keeps a short paragraph together);
+      //   • otherwise it is taller than a page (or already starts at the page top),
+      //     so SPLIT it at the line boundary — it fills this page and continues on
+      //     the next, instead of spilling past the bottom margin into the gap.
+      const isText = /^(P|H1|H2|H3)$/.test(b.tagName);
+      if (fitBottom > contentBottom && isText && !composing) {
+        if (b.offsetHeight <= usable && top > contentTop + 1) {
+          pageIndex += 1;
+          const nextTop = pageIndex * stride + m.top + headerReserve(pageIndex);
+          b.before(makeBlockSpacer(Math.max(0, nextTop - top)));
+        }
+        pageIndex = splitFlowBlock(b, pageIndex, ctx);
+        continue;
+      }
+
       // Overflows this page and isn't already the page's first block → push the
       // WHOLE block (image atomically; the grouped caption flows after it) down.
       if (fitBottom > contentBottom && top > contentTop + 1) {
@@ -321,6 +346,11 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
       // pages; without this the next block's page math would be stale → clipping.
       pageIndex = Math.max(pageIndex, Math.floor((bottom - 1) / stride));
     }
+
+    // Put the caret back if paragraph splitting (or clearing last pass's splits)
+    // moved it. Skipped when no line surgery happened, so ordinary typing in a
+    // short document never has its native selection touched.
+    if (savedCaret && (removedLineSpacers || page.querySelector('.doc-linebreak'))) restoreCaret(savedCaret);
 
     // Guarantee the sheets extend under ALL content — even a single block taller
     // than the content area, or content that spilled into a page gap. We add
@@ -424,6 +454,159 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   function clearPaginationArtifacts() {
     page.querySelectorAll(':scope > .doc-pagebreak').forEach((s) => s.remove());
     page.querySelectorAll('tr.doc-pagebreak-row, tr.doc-pagebreak-header').forEach((r) => r.remove());
+    // In-paragraph line spacers (the mid-block page-break bridges) live INSIDE a
+    // block, so `:scope >` above misses them. Remove each and rejoin the text nodes
+    // it split so the next measure sees the paragraph's natural, unbroken flow.
+    const lineSpacers = page.querySelectorAll('.doc-linebreak');
+    lineSpacers.forEach((s) => { const par = s.parentElement; s.remove(); if (par) par.normalize(); });
+    return lineSpacers.length > 0;
+  }
+
+  /** A block-level, non-editable bridge inserted INSIDE a paragraph at a line
+   *  boundary, so the text after it starts at the top of the next page — i.e. a
+   *  single long paragraph splits across pages instead of overflowing the bottom
+   *  margin. Stripped on read (no text) and on the next paginate (see above). */
+  function makeLineSpacer(h) {
+    const s = document.createElement('span');
+    s.className = 'doc-pagebreak doc-linebreak';
+    s.contentEditable = 'false';
+    s.setAttribute('aria-hidden', 'true');
+    s.style.display = 'block';
+    s.style.width = '100%';
+    s.style.height = `${h}px`;
+    return s;
+  }
+
+  /* ---- caret preservation across pagination surgery (splits/normalise) ---- */
+  // Splitting text nodes and normalising them would move the native caret, so we
+  // remember it as a character offset within its top-level text block (spacers add
+  // no text, so the offset stays valid) and put it back afterwards.
+  function charOffsetWithin(root, node, offset) {
+    // Count characters from the block start to the caret via a Range — correct for
+    // both text-node and element-container carets, and unaffected by empty spacers.
+    const r = document.createRange();
+    r.setStart(root, 0);
+    try { r.setEnd(node, offset); } catch { return 0; }
+    return r.toString().length;
+  }
+  function locateChar(root, off) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let t, seen = 0;
+    while ((t = walker.nextNode())) {
+      const len = (t.nodeValue || '').length;
+      if (seen + len >= off) return { node: t, offset: Math.max(0, off - seen) };
+      seen += len;
+    }
+    return t ? { node: t, offset: (t.nodeValue || '').length } : null;
+  }
+  function saveCaret() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    if (!r.collapsed || !page.contains(r.startContainer)) return null; // don't disturb a real selection
+    let blk = r.startContainer.nodeType === Node.TEXT_NODE ? r.startContainer.parentNode : r.startContainer;
+    while (blk && blk.parentNode !== page) blk = blk.parentNode;
+    if (!blk || !/^(P|H1|H2|H3)$/.test(blk.tagName)) return null; // only blocks we may split
+    return { blk, off: charOffsetWithin(blk, r.startContainer, r.startOffset) };
+  }
+  function restoreCaret(saved) {
+    if (!saved || !page.contains(saved.blk)) return;
+    const loc = locateChar(saved.blk, saved.off);
+    if (!loc) return;
+    try {
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.setStart(loc.node, loc.offset); r.collapse(true);
+      sel.removeAllRanges(); sel.addRange(r);
+    } catch { /* selection can throw if the node vanished — ignore */ }
+  }
+
+  /**
+   * Split one flowing text block (paragraph/heading) across page boundaries by
+   * inserting line spacers at the wrap points that cross each page's content
+   * bottom. A paragraph taller than a page (or one that starts low and overflows)
+   * then fills the current page and continues at the top of the next — instead of
+   * spilling past the bottom margin into the inter-page gap. Returns the page index
+   * the block ends on. Best-effort: if a break point can't be located it stops and
+   * lets the remainder flow (never throws, never loops forever).
+   */
+  function splitFlowBlock(b, pageIndex, { stride, m, PAGE_H }) {
+    const z = zoom || 1;
+    for (let guard = 0; guard < 80; guard += 1) {
+      const contentBottom = pageIndex * stride + PAGE_H - m.bottom - footerReserve(pageIndex);
+      if (b.offsetTop + b.offsetHeight <= contentBottom + 1) break; // fits now
+      const bRect = b.getBoundingClientRect();
+      const bTop = b.offsetTop;
+      // Layout Y (zoom-safe) of the bottom of the text from the block's start up to
+      // global character index `g`. Uses getBoundingClientRect, which — unlike
+      // caretRangeFromPoint — resolves for content scrolled OUT of the viewport too.
+      const pos = textIndex(b);
+      if (!pos.total) break;
+      const bottomAt = (g) => {
+        const loc = locateInIndex(pos, g);
+        if (!loc) return -Infinity;
+        const r = document.createRange();
+        r.setStart(pos.nodes[0].node, 0);
+        r.setEnd(loc.node, loc.offset);
+        let maxB = -Infinity;
+        for (const rc of r.getClientRects()) if (rc.height > 0.5) maxB = Math.max(maxB, rc.bottom);
+        return maxB === -Infinity ? bTop : bTop + (maxB - bRect.top) / z;
+      };
+      if (bottomAt(pos.total) <= contentBottom + 1) break; // (shouldn't happen) fits
+      // Largest character count whose text still fits above this page's bottom.
+      let lo = 1, hi = pos.total, gFit = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (bottomAt(mid) <= contentBottom) { gFit = mid; lo = mid + 1; } else hi = mid - 1;
+      }
+      if (gFit <= 0) break; // not even one line fits (line taller than page) — leave it
+      const g = snapToWord(pos, gFit);            // break on a word boundary
+      const lastFitBottom = bottomAt(g);
+      const nextTop = (pageIndex + 1) * stride + m.top + headerReserve(pageIndex + 1);
+      const spacerH = Math.round(nextTop - lastFitBottom);
+      if (spacerH <= 0) break;
+      const at = locateInIndex(pos, g);
+      if (!at) break;
+      insertNodeAt(at.node, at.offset, makeLineSpacer(spacerH));
+      pageIndex += 1;
+    }
+    const bottom = b.offsetTop + b.offsetHeight;
+    return Math.max(pageIndex, Math.floor((bottom - 1) / stride));
+  }
+
+  /** Ordered text nodes of a block with cumulative offsets, for O(log n) mapping
+   *  between a global character index and a (node, offset) DOM position. */
+  function textIndex(b) {
+    const nodes = []; let total = 0;
+    const w = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+    let t;
+    while ((t = w.nextNode())) { const len = t.nodeValue.length; nodes.push({ node: t, start: total, len }); total += len; }
+    return { nodes, total };
+  }
+  function locateInIndex(idx, g) {
+    for (const e of idx.nodes) if (g <= e.start + e.len) return { node: e.node, offset: g - e.start };
+    const last = idx.nodes[idx.nodes.length - 1];
+    return last ? { node: last.node, offset: last.len } : null;
+  }
+  /** Move a break index back to just after the previous space, so a paragraph
+   *  never splits in the middle of a word (falls back to `g` if none is near). */
+  function snapToWord(idx, g) {
+    const text = idx.nodes.map((n) => n.node.nodeValue).join('');
+    for (let k = Math.min(g, text.length); k > g - 40 && k > 0; k -= 1) {
+      if (/\s/.test(text[k - 1])) return k;
+    }
+    return g;
+  }
+
+  /** Insert `node` at a (container, offset) position, splitting a text node when
+   *  the position falls inside one. */
+  function insertNodeAt(container, offset, node) {
+    if (container.nodeType === Node.TEXT_NODE) {
+      const after = offset >= container.length ? container.nextSibling : container.splitText(offset);
+      container.parentNode.insertBefore(node, after);
+    } else {
+      container.insertBefore(node, container.childNodes[offset] || null);
+    }
   }
 
   /** A non-editable block-level spacer that bridges the gap a block is pushed
@@ -1251,6 +1434,12 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     inputTimer = setTimeout(commit, 350);
     schedulePaginate(); // reflow pages as you type, without waiting for commit
   });
+
+  // While an IME composition is active, DOM surgery (the paragraph splitter,
+  // node normalisation) would abort the composition, so pagination holds off and
+  // re-runs once composition ends.
+  page.addEventListener('compositionstart', () => { composing = true; });
+  page.addEventListener('compositionend', () => { composing = false; schedulePaginate(); });
 
   // Dormant reveal: a positioned box is hidden (original page image shows through)
   // until focused — click it to reveal + edit. On blur it re-hides UNLESS it was

@@ -133,9 +133,16 @@ export async function docxToBlockModel(buf, title = 'Document') {
       const drawings = readDrawings(node, files, rels, page).map(placeFloat);
       const para = readParagraph(node, files, rels, bodySize, styleInfo);
       const hasText = para.runs.some((r) => (r.text || '').trim());
-      // A pure section-break carrier (no text, no image) — the marker our layout
-      // exporter drops between pages — just advances the page; nothing to emit.
-      if (brk === 'section' && !hasText && !drawings.length) { pageIndex += 1; pendingBreak = true; continue; }
+      // A pure break carrier (no text, no image) — a lone `<w:br w:type="page"/>`
+      // paragraph, `pageBreakBefore`, or the section-break marker our layout exporter
+      // drops between pages — just advances the page; emitting nothing keeps a blank
+      // paragraph from opening every page. The break is carried onto the NEXT real
+      // block via `pendingBreak`. (A manual/before break already advanced pageIndex
+      // above; a section break advances it here.)
+      if (!hasText && !drawings.length && brk) {
+        if (brk === 'section') { pageIndex += 1; pendingBreak = true; }
+        continue;
+      }
       if (drawings.length) {
         applyBreak(drawings[0]);
         for (const d of drawings) blocks.push(d);
@@ -384,10 +391,28 @@ function readPageSetup(body) {
   }
   const pgMar = child(sect, 'pgMar');
   if (pgMar) {
-    // The model carries a single margin used on all four sides; the left margin is
-    // the most representative (Word documents are almost always symmetric).
-    const l = attr(pgMar, 'w:left');
-    if (l != null) page.margin = Math.max(0, Math.round(TWIP_TO_PX(l)));
+    // Read all four sides so the editor reproduces the document's REAL printable
+    // area. Collapsing them to one value (as before) forced the top/bottom margins
+    // to the — usually larger — left margin, shrinking the usable page height enough
+    // to bump content onto the next page and ignoring the page-setup margins the
+    // user sees. `margin` (single) is kept for back-compat / older callers.
+    const px = (v) => Math.max(0, Math.round(TWIP_TO_PX(v)));
+    const l = attr(pgMar, 'w:left'); const r = attr(pgMar, 'w:right');
+    const t = attr(pgMar, 'w:top'); const b = attr(pgMar, 'w:bottom');
+    const m = {
+      top: t != null ? px(t) : undefined,
+      right: r != null ? px(r) : undefined,
+      bottom: b != null ? px(b) : undefined,
+      left: l != null ? px(l) : undefined,
+    };
+    // Fill any missing side from another present side (symmetric fallback).
+    const any = m.left ?? m.right ?? m.top ?? m.bottom;
+    if (any != null) {
+      page.margins = {
+        top: m.top ?? any, right: m.right ?? any, bottom: m.bottom ?? any, left: m.left ?? any,
+      };
+      page.margin = page.margins.left; // representative single value
+    }
   }
   return page;
 }
