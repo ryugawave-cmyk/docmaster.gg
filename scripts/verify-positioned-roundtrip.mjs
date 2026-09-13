@@ -1,12 +1,14 @@
 /**
  * Round-trip check (headless Edge) — positioned Word export → re-import.
  *
- * Transfer-to-Doc builds a positioned model; Quick Export writes a .docx (with a
- * re-import JSON sidecar of the ORIGINAL model); re-opening that .docx in the
- * Document editor must come back POSITIONED and PIXEL-IDENTICAL to the original
- * (original raster + dormant boxes + exact frames/fills), not flattened or rebuilt
- * lossily. This drives the REAL browser modules (blockModelToDocx + docxToBlockModel)
- * in Edge, since both need DOMParser / canvas / DecompressionStream that Node lacks.
+ * Transfer-to-Doc builds a positioned model; the EXACT-layout export (opt-in via
+ * `blockModelToDocx(doc, { exact:true })`) writes a .docx with a re-import JSON sidecar
+ * of the ORIGINAL model; re-opening that .docx in the Document editor must come back
+ * POSITIONED and PIXEL-IDENTICAL to the original (original raster + dormant boxes +
+ * exact frames/fills), not flattened or rebuilt lossily. (Default Quick Export instead
+ * produces an editable flow document — see verify-positioned-docx.mjs.) This drives the
+ * REAL browser modules (blockModelToDocx + docxToBlockModel) in Edge, since both need
+ * DOMParser / canvas / DecompressionStream that Node lacks.
  *
  * Needs Microsoft Edge; uses a throwaway user-data dir to dodge the running-Edge
  * singleton. Best-effort: prints SKIPPED (exit 0) if Edge can't launch.
@@ -45,7 +47,7 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><body><script type="module"
           runs:[{text:'Registration No : L72511691071', marks:{fontSize:12,color:'#111111',fontFamily:'Arial'}}] },
       ],
     };
-    const blob = await blockModelToDocx(doc);
+    const blob = await blockModelToDocx(doc, { exact: true });
     const buf = await blob.arrayBuffer();
     const re = await docxToBlockModel(buf, 'roundtrip');
     const boxes = (re.blocks||[]).filter(b => b.type === 'posbox');
@@ -77,7 +79,7 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><body><script type="module"
       blocks: [{ type: 'posbox', page: 0, frame: { x: 20, y: 22, w: 400, h: 30 }, style: { align: 'left' }, fill: '#ffffff',
         runs: [{ text: 'SHRINKAGE TEST LINE', marks: { fontSize: 8, color: '#111111', fontFamily: 'Arial' } }] }],
     };
-    const buf = await (await blockModelToDocx(doc)).arrayBuffer();
+    const buf = await (await blockModelToDocx(doc, { exact: true })).arrayBuffer();
     const re = await docxToBlockModel(buf, 'shrink');
     const box = (re.blocks || []).find(b => b.type === 'posbox');
     return { size: box && box.runs[0].marks.fontSize };

@@ -17,7 +17,7 @@ import * as TG from '../../model/tableGrid.js';
 import { parseTtf } from './ttf.js';
 import { rowsToXlsxBlob } from './xlsx.js';
 import { SLIDE_MASTER, MASTER_RELS, SLIDE_LAYOUT, LAYOUT_RELS, THEME } from './pptx.js';
-import { positionedModelToDocx } from './docx.js';
+import { positionedModelToDocx, positionedModelToEditableDocx } from './docx.js';
 
 /**
  * A table block stores only master cells per row (covered positions omitted,
@@ -251,11 +251,18 @@ const PIC_NS = 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/pict
  *   `zipBlob`). Compress Word passes a DEFLATE zipper to shrink the file; the
  *   default keeps the normal Word export byte-for-byte unchanged.
  */
-export async function blockModelToDocx(doc, { zip = zipBlob } = {}) {
-  // A positioned (exact-layout) document — built by PDF→Doc "Transfer to Doc" — must
-  // keep its 2-D page layout, not be flattened into a stacked column. Hand it to the
-  // exact-layout Word exporter (full-page raster + one editable text box per line).
-  if (doc && doc.layout === 'positioned') return positionedModelToDocx(doc);
+export async function blockModelToDocx(doc, { zip = zipBlob, exact = false } = {}) {
+  // A positioned (exact-layout) document — built by PDF→Doc "Transfer to Doc" or by
+  // importing our own exact export. By default we export it as a NORMAL, editable Word
+  // document: standard paragraphs (w:p) / runs (w:r) and real tables (w:tbl), so no
+  // ordinary text lands inside a floating text box / drawing object that Word, Google
+  // Docs or LibreOffice treat as a shape to select rather than text to type in. Only an
+  // explicit `exact` request keeps the pixel-perfect layout (absolute w:framePr frames
+  // over the page raster, plus the lossless re-import sidecar) — editability and Word
+  // compatibility win over pixel-exact appearance otherwise.
+  if (doc && doc.layout === 'positioned') {
+    return exact ? positionedModelToDocx(doc) : positionedModelToEditableDocx(doc);
+  }
   const media = [];   // { name, bytes }
   const rels = [];    // { id, target } (image relationships)
   let relSeq = 100;

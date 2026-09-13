@@ -186,6 +186,77 @@ export async function positionedModelToDocx(doc) {
   return packDocx(documentXml, media, rels, extraParts);
 }
 
+/**
+ * Export a DOCUMENT-editor POSITIONED model as a NORMAL, fully-editable Word
+ * document — standard paragraphs (`w:p`) / runs (`w:r`) and genuine tables
+ * (`w:tbl`), NOT absolutely-positioned text frames or drawing objects. Word,
+ * Google Docs and LibreOffice all let you click and type in these directly, so no
+ * ordinary line ends up trapped inside an editable box/shape the way the frame
+ * ("exact") export leaves it.
+ *
+ * How: each `posbox` line is fed (per page) as a positioned text run to the
+ * geometry reconstruction (`reconstructPages` in services/convert/reconstruct.js)
+ * that groups runs into reading-order headings/paragraphs and detects aligned
+ * grids as real tables — the SAME machine that powers the PDF exporter's editable
+ * "layout" mode. A line's sampled `fill` is carried as `boxBg` so coloured header
+ * bars / table-header cells reappear as native paragraph / cell shading.
+ *
+ * Trade-off (deliberate, per product direction): the decorative full-page raster
+ * baked in at import (page borders, shading, logos) is DROPPED — we favour a clean,
+ * editable, Word-compatible document over pixel-exact appearance. Callers that need
+ * the pixel-perfect positioned layout use `positionedModelToDocx` instead.
+ */
+export function positionedModelToEditableDocx(doc) {
+  const media = [];
+  const rels = [];
+  const addImage = (src) => {
+    const bytes = dataURLToBytes(src);
+    const ext = /^data:image\/png/i.test(src) ? 'png' : 'jpg';
+    const idx = media.length + 1;
+    const name = `image${idx}.${ext}`;
+    media.push({ name, bytes, ext });
+    const id = `rId${100 + idx}`;
+    rels.push({ id, target: `media/${name}` });
+    return id;
+  };
+
+  const fallbackW = (doc.page && doc.page.width) || 794;
+  const fallbackH = (doc.page && doc.page.height) || 1123;
+  const srcPages = (doc.pages && doc.pages.length) ? doc.pages : [{ width: fallbackW, height: fallbackH }];
+  const pages = srcPages.map((pg, i) => ({
+    index: i, w: pg.width || fallbackW, h: pg.height || fallbackH, runs: [], images: [],
+  }));
+
+  for (const b of doc.blocks || []) {
+    if (!b || b.type !== 'posbox') continue;
+    const pi = pages[b.page || 0] ? (b.page || 0) : 0;
+    const f = b.frame || {};
+    const text = (b.runs || []).map((r) => (r && r.text) || '').join('');
+    if (!text.trim()) continue;
+    // Use the marks of the first non-empty run for the whole line — the reconstruction
+    // (like the PDF path) carries ONE style per line, so a line's dominant style wins.
+    const lead = (b.runs || []).find((r) => r && r.text && String(r.text).trim()) || (b.runs && b.runs[0]) || {};
+    const m = lead.marks || {};
+    pages[pi].runs.push({
+      text,
+      x: f.x || 0, y: f.y || 0, w: f.w || 0,
+      h: f.h || Math.max(1, Math.round((m.fontSize || 14) * 1.2)),
+      fontSize: m.fontSize || 14,
+      bold: !!m.bold, italic: !!m.italic,
+      color: normHex(m.color) || undefined,
+      fontFamily: m.fontFamily,
+      align: (b.style && b.style.align) || 'left',
+      boxBg: normHex(b.fill) || '',
+    });
+  }
+
+  const bodyXml = faithfulBody({ pages }, addImage, true);
+  const documentXml =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+    `<w:document ${DOC_NS}><w:body>${bodyXml}</w:body></w:document>`;
+  return packDocx(documentXml, media, rels);
+}
+
 /** GZIP a byte array via the platform CompressionStream (browser + Node 18+). */
 async function gzipBytes(u8) {
   const cs = new CompressionStream('gzip');
