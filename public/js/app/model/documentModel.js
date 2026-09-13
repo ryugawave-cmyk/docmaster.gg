@@ -153,7 +153,8 @@ export function marksEqual(a, b) {
     a.strike === b.strike &&
     a.fontFamily === b.fontFamily &&
     a.fontSize === b.fontSize &&
-    a.color === b.color
+    a.color === b.color &&
+    (a.highlight || '') === (b.highlight || '')
   );
 }
 

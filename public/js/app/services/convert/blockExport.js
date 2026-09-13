@@ -54,6 +54,26 @@ const marksOf = (run) => ({ ...DEFAULT_MARKS, ...(run.marks || {}) });
 const runsText = (runs = []) => runs.map((r) => r.text || '').join('');
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// OOXML w:highlight only supports 16 named colours. A run highlight that matches one
+// (e.g. pure yellow) is written as <w:highlight w:val="yellow"/> (what Word's marker
+// uses); any other colour is written as run-level shading <w:shd w:fill="RRGGBB"/> so
+// the exact highlight colour is preserved. See docxImport for the inverse mapping.
+const HIGHLIGHT_NAMES = {
+  ffff00: 'yellow', '00ff00': 'green', '00ffff': 'cyan', ff00ff: 'magenta',
+  '0000ff': 'blue', ff0000: 'red', '000080': 'darkBlue', '008080': 'darkCyan',
+  '008000': 'darkGreen', '800080': 'darkMagenta', '800000': 'darkRed', '808000': 'darkYellow',
+  '808080': 'darkGray', c0c0c0: 'lightGray', '000000': 'black', ffffff: 'white',
+};
+/** A run highlight colour (#rrggbb) → run properties: a named w:highlight when it
+ *  matches one of Word's 16 marker colours, else w:shd shading with the exact fill. */
+function highlightXml(hex) {
+  if (!hex) return '';
+  const h = String(hex).replace(/^#/, '').toLowerCase();
+  if (!/^[0-9a-f]{6}$/.test(h)) return '';
+  const name = HIGHLIGHT_NAMES[h];
+  return name ? `<w:highlight w:val="${name}"/>` : `<w:shd w:val="clear" w:color="auto" w:fill="${h.toUpperCase()}"/>`;
+}
+
 /* ---- header / footer helpers (shared across exporters) ---- */
 function normHf(cfg) {
   cfg = cfg || {};
@@ -286,6 +306,7 @@ export async function blockModelToDocx(doc, { zip = zipBlob, editable = false } 
     m.strike ? '<w:strike/>' : '',
     `<w:sz w:val="${Math.round(m.fontSize * PX_TO_PT * 2)}"/>`,
     `<w:color w:val="${hex6(m.color)}"/>`,
+    highlightXml(m.highlight),
   ].join('');
 
   function runXml(run) {

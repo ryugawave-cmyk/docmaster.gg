@@ -133,6 +133,7 @@ function runToNode(run) {
   span.style.fontFamily = m.fontFamily;
   span.style.fontSize = `${m.fontSize}px`;
   span.style.color = m.color;
+  if (m.highlight) span.style.backgroundColor = m.highlight; // text highlighter (marker)
   if (m.bold) span.style.fontWeight = '700';
   if (m.italic) span.style.fontStyle = 'italic';
   // Underline and strikethrough share the text-decoration property, so combine.
@@ -474,6 +475,7 @@ export function marksFromEl(el) {
   // <sup>/<sub> shrink font-size via UA styles; read the size from the nearest
   // real ancestor so superscript/subscript text keeps its true size in the model.
   const sizeEl = /^(SUP|SUB)$/.test(el.tagName) && el.parentElement ? el.parentElement : el;
+  const highlight = highlightHexOf(el); // text-highlighter background, if any
   return {
     bold: (parseInt(cs.fontWeight, 10) || 400) >= 600,
     italic: cs.fontStyle === 'italic',
@@ -482,7 +484,36 @@ export function marksFromEl(el) {
     fontFamily: cleanFamily(cs.fontFamily),
     fontSize: Math.round(parseFloat(getComputedStyle(sizeEl).fontSize)) || DEFAULT_MARKS.fontSize,
     color: rgbToHex(cs.color) || DEFAULT_MARKS.color,
+    ...(highlight ? { highlight } : {}),
   };
+}
+
+/** The text-highlighter colour on a run element: the nearest OPAQUE inline background
+ *  ('#rrggbb'), or null. Walks up through inline spans only — it STOPS at the block
+ *  container (paragraph / list item / cell / positioned box) so a page/posbox mask fill
+ *  is never mistaken for a highlight. A transparent (alpha 0) background is ignored. */
+function highlightHexOf(el) {
+  let n = el;
+  for (let i = 0; n && i < 6; i += 1) {
+    const tag = n.tagName || '';
+    if ((n.classList && (n.classList.contains('doc-block') || n.classList.contains('doc-posbox')))
+      || /^(P|H1|H2|H3|LI|TD|TH|DIV|UL|OL)$/.test(tag)) return null;
+    const hex = opaqueBgHex(getComputedStyle(n).backgroundColor);
+    if (hex) return hex;
+    n = n.parentElement;
+  }
+  return null;
+}
+
+/** An opaque CSS background colour → '#rrggbb'; null for transparent / alpha-0 / none. */
+function opaqueBgHex(bg) {
+  if (!bg) return null;
+  if (bg.startsWith('#')) return bg;
+  const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
+  if (!m) return null;
+  if (m[4] != null && parseFloat(m[4]) === 0) return null; // fully transparent → no highlight
+  const h = (v) => Number(v).toString(16).padStart(2, '0');
+  return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
 }
 
 function cleanFamily(family) {

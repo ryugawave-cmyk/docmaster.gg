@@ -18,6 +18,14 @@ import { fitBoxFontToInk } from './positionedImport.js';
 
 const PT_TO_PX = 96 / 72;
 const EMU_PER_PX = 9525;                 // OOXML EMU per CSS px @96dpi
+// Word's 16 named highlight (marker) colours → hex, so an imported <w:highlight> maps
+// back to the editor's background-colour highlight model. See blockExport for the inverse.
+const HIGHLIGHT_HEX = {
+  yellow: '#ffff00', green: '#00ff00', cyan: '#00ffff', magenta: '#ff00ff',
+  blue: '#0000ff', red: '#ff0000', darkBlue: '#000080', darkCyan: '#008080',
+  darkGreen: '#008000', darkMagenta: '#800080', darkRed: '#800000', darkYellow: '#808000',
+  darkGray: '#808080', lightGray: '#c0c0c0', black: '#000000', white: '#ffffff',
+};
 const PAGE_GAP_PX = 28;                  // must match documentEditor.js PAGE_GAP (page-stack gap)
 const TWIP_TO_PX = (tw) => (parseInt(tw, 10) / 20) * PT_TO_PX;   // 20 twips = 1pt
 const HALFPT_TO_PX = (hp) => (parseInt(hp, 10) / 2) * PT_TO_PX;  // w:sz is half-points
@@ -647,6 +655,14 @@ function readMarks(rPr, defaults = {}) {
     if (color) m.color = color;
     const fam = resolveFontEl(child(rPr, 'rFonts'));      // explicit or theme font
     if (fam) m.fontFamily = fam;
+    // Text highlighter: a named w:highlight (Word's marker) or, for a non-standard
+    // colour, run-level shading (w:shd w:fill). Map either back to the editor's hex bg.
+    const hl = attr(child(rPr, 'highlight'), 'w:val');
+    if (hl && hl !== 'none') m.highlight = HIGHLIGHT_HEX[hl] || `#${hl.replace(/^#/, '')}`;
+    else {
+      const fill = attr(child(rPr, 'shd'), 'w:fill');
+      if (fill && fill !== 'auto') m.highlight = `#${fill.replace(/^#/, '')}`;
+    }
   }
   // Fall back to the paragraph/style/document default so a run that inherits its size,
   // font or COLOUR (very common — Word keeps heading colour in the style, not inline)
