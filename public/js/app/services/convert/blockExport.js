@@ -843,6 +843,13 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
       const rec = pickFont(fonts, m);
       fontsUsed.add(rec);
       const sizePt = m.fontSize * PX_TO_PT;
+      const segWpt = measure(seg.text, m) * PX_TO_PT;
+      // Text highlighter: a filled rectangle behind the glyphs (painted first, so the
+      // text sits on top). Covers the line's em box — descender to a little above the cap.
+      if (m.highlight) {
+        const [hr, hg, hb] = hexToRgb(m.highlight);
+        ops.push(`${hr} ${hg} ${hb} rg ${round(xPx * PX_TO_PT)} ${round(baselineY - sizePt * 0.24)} ${round(segWpt)} ${round(sizePt * 1.15)} re f`);
+      }
       const [r, g, b] = hexToRgb(m.color);
       ops.push(`BT /${rec.id} ${round(sizePt)} Tf ${r} ${g} ${b} rg 1 0 0 1 ${round(xPx * PX_TO_PT)} ${round(baselineY)} Tm <${encodeGlyphs(seg.text, rec)}> Tj ET`);
       if (m.underline) {
@@ -1397,9 +1404,13 @@ const P_NS = 'http://schemas.openxmlformats.org/presentationml/2006/main';
 function aRunPr(m) {
   const sz = Math.max(100, Math.round(m.fontSize * PX_TO_PT * 100));
   const face = esc(cleanFont(m.fontFamily));
+  // Text highlighter → DrawingML <a:highlight> (schema order: after solidFill, before
+  // latin). Preserves the marker colour so a highlighted run stays highlighted in PPT.
+  const hl = m.highlight ? `<a:highlight><a:srgbClr val="${hex6(m.highlight)}"/></a:highlight>` : '';
   return `<a:rPr lang="en-US" sz="${sz}"${m.bold ? ' b="1"' : ''}${m.italic ? ' i="1"' : ''}` +
     `${m.underline ? ' u="sng"' : ''}${m.strike ? ' strike="sngStrike"' : ''} dirty="0">` +
     `<a:solidFill><a:srgbClr val="${hex6(m.color)}"/></a:solidFill>` +
+    hl +
     `<a:latin typeface="${face}"/><a:cs typeface="${face}"/></a:rPr>`;
 }
 

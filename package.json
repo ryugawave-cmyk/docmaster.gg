@@ -14,6 +14,7 @@
     "service:uninstall": "node scripts/service-uninstall.js",
     "vendor:ocr": "node scripts/vendor-ocr.mjs",
     "lint": "echo \"No linter configured yet\" && exit 0",
+    "verify:advanced-export": "node scripts/verify-advanced-export.mjs",
     "verify:delete": "node scripts/verify-delete.js",
     "verify:docx-formatting": "node scripts/verify-docx-formatting.mjs",
     "verify:docx-highlight": "node scripts/verify-docx-highlight.mjs",
