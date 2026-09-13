@@ -1,26 +1,25 @@
 /**
  * Regression test — Quick Export of a POSITIONED (exact-layout) document.
  *
- * A PDF brought into the Document editor via "Transfer to Doc" (or one of our own
- * exact exports re-imported) is a positioned model (doc.layout==='positioned',
- * per-page raster in doc.pages[].bg, one `posbox` block per line).
+ * A PDF/DOCX brought into the Document editor as a positioned model
+ * (doc.layout==='positioned') keeps its graphics — logos, emblems, banner shapes,
+ * photos and stylised/complex-script text — in the PER-PAGE BACKGROUND RASTER
+ * (doc.pages[].bg); only plain text lines are `posbox` blocks. So DEFAULT Quick
+ * Export (blockModelToDocx → positionedModelToDocx) must reproduce the page: the
+ * raster behind the text, one inline-editable w:framePr frame per line on top —
+ * the only representation that visually matches the editor in Word / LibreOffice.
+ * It asserts:
  *
- * DEFAULT Quick Export (blockModelToDocx) must now produce a NORMAL, fully-editable
- * Word document — standard paragraphs (w:p) / runs (w:r) and real tables (w:tbl),
- * NOT absolutely-positioned text frames or floating text boxes. No ordinary line may
- * end up inside a drawing object that Word / Google Docs / LibreOffice treat as a
- * shape to select rather than text to type in. This drives the REAL blockModelToDocx
- * routing → positionedModelToEditableDocx and asserts:
+ *   • lines are POSITIONED TEXT FRAMES (w:framePr), never floating text boxes
+ *     (wps:wsp / mc:AlternateContent) — floating boxes are select-first objects;
+ *   • the page raster rides BEHIND the text (behindDoc), so no graphic is lost;
+ *   • BROWSER path (canvas): the baked text is erased and frames are TRANSPARENT
+ *     (no w:shd fill) → no visible box; NODE/fallback keeps an opaque w:shd mask;
+ *   • one section per page, real text kept, never flattened to a stacked flow.
  *
- *   • lines become standard paragraphs (w:p), never w:framePr frames or floating
- *     text boxes (wps:wsp / mc:AlternateContent / v:textbox);
- *   • an aligned grid of line-boxes becomes a genuine editable table (w:tbl);
- *   • the decorative full-page raster is dropped (editability over pixel-exactness);
- *   • the real text survives and each page is its own section.
- *
- * The pixel-perfect path is still reachable via `{ exact:true }` and is covered too
- * (absolute w:framePr frames + page raster + lossless re-import sidecar), along with
- * the inkBand eraser and mergeSidecar helpers it relies on.
+ * The pure-reflow path (standard w:p / w:tbl, no frames, graphics dropped) is an
+ * OPT-IN via `{ editable:true }` and is covered too. The inkBand eraser and
+ * mergeSidecar helpers are exercised as well.
  *
  * Run: `node scripts/verify-positioned-docx.mjs`.
  */
@@ -60,8 +59,8 @@ const makeDoc = () => ({
   ],
 });
 
-// A single page whose line-boxes form a 2×2 grid (two columns that line up across
-// two rows) — the reconstruction must recognise it as a real table.
+// A single page whose line-boxes form a 2×2 grid — used to prove the OPT-IN reflow
+// recognises an aligned grid as a real table.
 const makeTableDoc = () => ({
   layout: 'positioned',
   page: { width: 794, height: 1123, margin: 0 },
@@ -84,29 +83,8 @@ async function xmlOf(doc, opts) {
   return { buf, s: buf.toString('latin1'), type: blob.type };
 }
 
-/* ---- A) DEFAULT Quick Export → a normal, fully-editable Word document ------------- */
-{
-  const { buf, s, type } = await xmlOf(makeDoc());
-  check('is a Word .docx blob', type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-  check('is a zip (PK header)', buf[0] === 0x50 && buf[1] === 0x4b);
-  check('emits standard paragraphs (w:p)', s.includes('<w:p>') || s.includes('<w:p '));
-  check('does NOT emit positioned text frames', !s.includes('<w:framePr'));
-  check('does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent') && !s.includes('<v:textbox'));
-  check('drops the decorative page raster', !s.includes('word/media/image') && !s.includes('behindDoc'));
-  check('no re-import sidecar in editable mode', !s.includes('docmaster/model.json'));
-  check('keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
-  check('one section per page (2 pages)', (s.match(/<w:sectPr>/g) || []).length === 2);
-}
-
-/* ---- B) An aligned grid of line-boxes becomes a genuine editable table ------------ */
-{
-  const { s } = await xmlOf(makeTableDoc());
-  check('grid of line-boxes → real w:tbl table', s.includes('<w:tbl>'));
-  check('table keeps its cell text', s.includes('Name') && s.includes('Age') && s.includes('Rajat') && s.includes('30'));
-  check('table export uses no text frames', !s.includes('<w:framePr'));
-}
-
-/* ---- C) EXACT path (opt-in): browser stub → erased raster → TRANSPARENT frames ---- */
+/* ---- A) DEFAULT Quick Export → layout-faithful (raster + editable frames) --------- */
+// Browser stub: canvas/Image so the raster is erased under the text → transparent frames.
 globalThis.Image = class { set src(_v) { this.naturalWidth = 794; this.naturalHeight = 1123; queueMicrotask(() => this.onload && this.onload()); } };
 globalThis.document = {
   createElement: () => {
@@ -121,26 +99,47 @@ globalThis.document = {
   },
 };
 {
-  const { s } = await xmlOf(makeDoc(), { exact: true });
-  check('exact: embeds a page raster image', s.includes('word/media/image1'));
-  check('exact: raster sits BEHIND the text', s.includes('behindDoc="1"'));
-  check('exact: emits positioned text frames', s.includes('<w:framePr'));
-  check('exact: frames anchor to the page', s.includes('w:vAnchor="page"') && s.includes('w:hAnchor="page"'));
-  check('exact: does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent'));
-  check('exact: erased raster → TRANSPARENT frames (no shd box)', !s.includes('<w:shd'));
-  check('exact: embeds the gzipped re-import sidecar', s.includes('docmaster/model.json.gz'));
-  check('exact: keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
-  check('exact: one section per page (2 pages)', (s.match(/<w:sectPr>/g) || []).length === 2);
+  const { buf, s, type } = await xmlOf(makeDoc());
+  check('is a Word .docx blob', type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  check('is a zip (PK header)', buf[0] === 0x50 && buf[1] === 0x4b);
+  check('embeds a page raster image (graphics preserved)', s.includes('word/media/image1'));
+  check('raster sits BEHIND the text', s.includes('behindDoc="1"'));
+  check('emits positioned text frames', s.includes('<w:framePr'));
+  check('frames anchor to the page', s.includes('w:vAnchor="page"') && s.includes('w:hAnchor="page"'));
+  check('does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent'));
+  check('erased raster → TRANSPARENT frames (no shd box)', !s.includes('<w:shd'));
+  check('embeds the gzipped re-import sidecar', s.includes('docmaster/model.json.gz'));
+  check('keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
+  check('one section per page (2 pages)', (s.match(/<w:sectPr>/g) || []).length === 2);
+  check('did NOT flatten to a flow body', !s.includes('w:pgMar w:top="1440"'));
 }
 
-/* ---- D) EXACT fallback (no canvas): opaque shd mask kept, still frames ------------- */
+/* ---- B) OPT-IN reflow ({ editable:true }) → normal, fully-editable paragraphs ------ */
+{
+  const { s } = await xmlOf(makeDoc(), { editable: true });
+  check('editable: emits standard paragraphs (w:p)', s.includes('<w:p>') || s.includes('<w:p '));
+  check('editable: does NOT emit positioned text frames', !s.includes('<w:framePr'));
+  check('editable: does NOT use floating text boxes', !s.includes('wps:wsp') && !s.includes('mc:AlternateContent') && !s.includes('<v:textbox'));
+  check('editable: no page raster / sidecar (pure reflow)', !s.includes('word/media/image') && !s.includes('docmaster/model.json'));
+  check('editable: keeps the real text', s.includes('RAILWAY RECRUITMENT BOARD') && s.includes('Registration No : L72511691071'));
+}
+
+/* ---- C) OPT-IN reflow: an aligned grid of line-boxes becomes a real table --------- */
+{
+  const { s } = await xmlOf(makeTableDoc(), { editable: true });
+  check('editable: grid of line-boxes → real w:tbl table', s.includes('<w:tbl>'));
+  check('editable: table keeps its cell text', s.includes('Name') && s.includes('Age') && s.includes('Rajat') && s.includes('30'));
+}
+
+/* ---- D) DEFAULT fallback (no canvas) → opaque shd mask kept, still frames ---------- */
 delete globalThis.document;
 delete globalThis.Image;
 {
-  const { s } = await xmlOf(makeDoc(), { exact: true });
-  check('exact fallback still uses positioned frames', s.includes('<w:framePr'));
-  check('exact fallback masks with opaque shd fill', s.includes('w:fill="ffffff"') && s.includes('w:fill="eeeeee"'));
-  check('exact fallback keeps the original raster', s.includes('word/media/image1'));
+  const { s } = await xmlOf(makeDoc());
+  check('fallback still uses positioned frames', s.includes('<w:framePr'));
+  check('fallback masks with opaque shd fill', s.includes('w:fill="ffffff"') && s.includes('w:fill="eeeeee"'));
+  check('fallback keeps the original raster', s.includes('word/media/image1'));
+  check('fallback did NOT flatten to a flow body', !s.includes('w:pgMar w:top="1440"'));
 }
 
 /* ---- E) inkBand: erase covers glyph rows but SPARES a grid rule below them --------- */

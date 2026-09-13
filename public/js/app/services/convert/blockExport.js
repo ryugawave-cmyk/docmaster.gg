@@ -251,17 +251,21 @@ const PIC_NS = 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/pict
  *   `zipBlob`). Compress Word passes a DEFLATE zipper to shrink the file; the
  *   default keeps the normal Word export byte-for-byte unchanged.
  */
-export async function blockModelToDocx(doc, { zip = zipBlob, exact = false } = {}) {
+export async function blockModelToDocx(doc, { zip = zipBlob, editable = false } = {}) {
   // A positioned (exact-layout) document — built by PDF→Doc "Transfer to Doc" or by
-  // importing our own exact export. By default we export it as a NORMAL, editable Word
-  // document: standard paragraphs (w:p) / runs (w:r) and real tables (w:tbl), so no
-  // ordinary text lands inside a floating text box / drawing object that Word, Google
-  // Docs or LibreOffice treat as a shape to select rather than text to type in. Only an
-  // explicit `exact` request keeps the pixel-perfect layout (absolute w:framePr frames
-  // over the page raster, plus the lossless re-import sidecar) — editability and Word
-  // compatibility win over pixel-exact appearance otherwise.
+  // importing a frame-based / raster-backed .docx. Its graphics (logos, emblems,
+  // banner shapes, photos, and any stylised/complex-script text) live in the per-page
+  // BACKGROUND RASTER (doc.pages[].bg), not as separate blocks; only plain text lines
+  // are `posbox` blocks. So the layout-faithful export — raster behind the text, one
+  // inline-editable w:framePr frame per line on top — is the ONLY representation that
+  // visually matches the editor when opened in Word / LibreOffice. Frames are real
+  // body paragraphs anchored to page coordinates (transparent, no drawing object): you
+  // click and type like normal text, so text is NOT trapped in a floating box.
+  //
+  // `editable:true` opts into a pure reflow (standard w:p/w:tbl, no frames) for callers
+  // that want maximally-editable output and accept losing the baked graphics/positions.
   if (doc && doc.layout === 'positioned') {
-    return exact ? positionedModelToDocx(doc) : positionedModelToEditableDocx(doc);
+    return editable ? positionedModelToEditableDocx(doc) : positionedModelToDocx(doc);
   }
   const media = [];   // { name, bytes }
   const rels = [];    // { id, target } (image relationships)
