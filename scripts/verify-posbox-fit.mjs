@@ -24,6 +24,10 @@
  *   9. a near-match (< FIT_EPS) is left unchanged (no pointless reflow),
  *  10. no raster / no canvas (e.g. Node) → every size untouched (fail-safe).
  *
+ * It also guards the WIDTH fit (same pass): a wrapping (paragraph) box is widened so
+ * the wider substitute font can't re-wrap the imported line — capped at the page edge,
+ * never touching narrow `nowrap` boxes, and never shrinking a box already wide enough.
+ *
  * Drives the REAL shipping functions: measureInkHeight is pure (synthetic pixels);
  * fitBoxFontToInk runs against a stub canvas/Image whose pixels and text metrics are
  * knobs. Run: `node scripts/verify-posbox-fit.mjs`.
@@ -45,6 +49,7 @@ fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ type: 'module'
 let PIXELS = null;   // Uint8ClampedArray for the "raster" the fitter decodes
 let RW = 0, RH = 0;  // raster dimensions
 let DOM_H = 0;       // actualBoundingBox height the stub measureText reports
+let DOM_W = 0;       // advance width the stub measureText reports (for the width fit)
 globalThis.Image = class {
   set src(_v) { this.naturalWidth = RW; this.naturalHeight = RH; queueMicrotask(() => this.onload && this.onload()); }
 };
@@ -53,7 +58,7 @@ globalThis.document = {
     width: 0, height: 0,
     getContext: () => ({
       font: '',
-      measureText: () => ({ actualBoundingBoxAscent: DOM_H, actualBoundingBoxDescent: 0 }),
+      measureText: () => ({ actualBoundingBoxAscent: DOM_H, actualBoundingBoxDescent: 0, width: DOM_W }),
       drawImage: () => {},
       getImageData: () => ({ data: PIXELS }),
     }),
@@ -169,6 +174,47 @@ const page = () => ({ bg: 'data:stub', width: RW, height: RH });
   try { await fitBoxFontToInk([{ bg: null, width: 100, height: 40 }], [b]); } catch { threw = true; }
   check('missing raster does not throw', !threw);
   check('missing raster leaves sizes untouched', b.runs[0].marks.fontSize === 20);
+}
+
+/* ---- WIDTH fit: a wider substitute font must not RE-WRAP the imported line -------
+ * The box width comes from the PDF's own (narrower) ink extent; the editor draws the
+ * line in a substitute font that is a little wider, so a wrapping (paragraph) box would
+ * break its last word onto a 2nd line when revealed. fitBoxFontToInk now also WIDENS a
+ * wrapping box so the line fits on one line — capped at the page's right edge, and
+ * never touching narrow `nowrap` boxes. Height is a near-match here (baked 24 ≈ dom 24)
+ * so the font size stays 20 and only the WIDTH changes. */
+
+/* 11. A wide paragraph box widens to fit the substitute line (300 + 0.6·20 = 312). */
+{
+  RW = 800; RH = 40; PIXELS = raster(RW, RH, [[8, 32, 0.5]]); DOM_H = 24; DOM_W = 300;
+  const b = box({ frame: { x: 50, y: 0, w: 200, h: 40 } });
+  await fitBoxFontToInk([page()], [b]);
+  check('wrapping box widened to hold the line', b.frame.w === 300 + Math.round(20 * 0.6));
+  check('width fit does NOT change the font size', b.runs[0].marks.fontSize === 20);
+}
+
+/* 12. A `nowrap` box (table label/value) is NOT widened — its mask must not spill. */
+{
+  RW = 800; RH = 40; PIXELS = raster(RW, RH, [[8, 32, 0.5]]); DOM_H = 24; DOM_W = 300;
+  const b = box({ nowrap: true, frame: { x: 50, y: 0, w: 200, h: 40 } });
+  await fitBoxFontToInk([page()], [b]);
+  check('nowrap box left at its original width', b.frame.w === 200);
+}
+
+/* 13. Widening is capped at the page's right edge (never runs off the sheet). */
+{
+  RW = 800; RH = 40; PIXELS = raster(RW, RH, [[8, 32, 0.5]]); DOM_H = 24; DOM_W = 500;
+  const b = box({ frame: { x: 600, y: 0, w: 100, h: 40 } }); // needs 512, but edge caps at 198
+  await fitBoxFontToInk([page()], [b]);
+  check('width capped at the page right edge', b.frame.w === RW - 600 - 2);
+}
+
+/* 14. A box already wide enough is left unchanged (never shrinks). */
+{
+  RW = 800; RH = 40; PIXELS = raster(RW, RH, [[8, 32, 0.5]]); DOM_H = 24; DOM_W = 200;
+  const b = box({ frame: { x: 50, y: 0, w: 400, h: 40 } }); // needs 212 < 400
+  await fitBoxFontToInk([page()], [b]);
+  check('already-wide box left unchanged', b.frame.w === 400);
 }
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }

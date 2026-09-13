@@ -374,18 +374,41 @@ export async function fitBoxFontToInk(pages, blocks) {
       const m0 = b.runs[0].marks || {};
       const fs = m0.fontSize || 14;
       const family = m0.fontFamily || 'Arial, Helvetica, sans-serif';
-      mctx.font = `${m0.italic ? 'italic ' : ''}${m0.bold ? '700' : '400'} ${fs}px ${family}`;
+      const fontStr = (sz) => `${m0.italic ? 'italic ' : ''}${m0.bold ? '700' : '400'} ${sz}px ${family}`;
+
+      // (a) HEIGHT fit — match the substitute's inked height to the baked line (see below).
+      mctx.font = fontStr(fs);
       const tm = mctx.measureText(text);
       const hDom = (tm.actualBoundingBoxAscent || 0) + (tm.actualBoundingBoxDescent || 0);
-      if (!(hDom > 0)) continue;              // no metrics → leave the size alone
-      const hBaked = measureInkHeight(data, W, H, b.frame, scale, lumFromHex(b.fill));
-      if (!hBaked) continue;
-      let s = hBaked / hDom;
-      if (!(s > 0) || Math.abs(s - 1) < FIT_EPS) continue; // already matches
-      s = Math.max(FIT_LO, Math.min(FIT_HI, s));
-      for (const r of b.runs) {
-        const cur = (r.marks && r.marks.fontSize) || fs;
-        if (r.marks) r.marks.fontSize = Math.max(5, Math.round(cur * s));
+      const hBaked = hDom > 0 ? measureInkHeight(data, W, H, b.frame, scale, lumFromHex(b.fill)) : null;
+      if (hBaked) {
+        let s = hBaked / hDom;
+        if (s > 0 && Math.abs(s - 1) >= FIT_EPS) {     // not already a match
+          s = Math.max(FIT_LO, Math.min(FIT_HI, s));
+          for (const r of b.runs) {
+            const cur = (r.marks && r.marks.fontSize) || fs;
+            if (r.marks) r.marks.fontSize = Math.max(5, Math.round(cur * s));
+          }
+        }
+      }
+
+      // (b) WIDTH fit — never let the substitute font RE-WRAP the original line.
+      // The box width came from the PDF's own (narrower) ink extent, but the editor
+      // draws the line in a substitute font that is a touch WIDER, so a wrapping
+      // (paragraph) box breaks its last word onto a 2nd visual line the instant it is
+      // revealed — the "text reflows / compresses / the box narrows when I click it"
+      // bug. Widen the box to hold its text on ONE line in the substitute font (at the
+      // just-fitted size) so the editable line wraps exactly like the page image did.
+      // Narrow single-line boxes (`nowrap` — table labels/values) are left alone:
+      // widening their opaque mask fill would reach into the neighbouring cell. Capped
+      // at the page's right edge so a box never runs off the sheet.
+      if (!b.nowrap) {
+        const fs2 = (b.runs[0].marks && b.runs[0].marks.fontSize) || fs;
+        mctx.font = fontStr(fs2);
+        const wNeeded = Math.ceil(mctx.measureText(text).width || 0) + Math.round(fs2 * 0.6);
+        const maxW = Math.max(b.frame.w, Math.round((pg.width || 0) - b.frame.x - 2));
+        const wFit = Math.min(wNeeded, maxW);
+        if (wFit > b.frame.w) b.frame.w = wFit;
       }
     }
   }
