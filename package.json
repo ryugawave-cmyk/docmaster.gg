@@ -15,6 +15,7 @@
     "vendor:ocr": "node scripts/vendor-ocr.mjs",
     "lint": "echo \"No linter configured yet\" && exit 0",
     "verify:delete": "node scripts/verify-delete.js",
+    "verify:docx-formatting": "node scripts/verify-docx-formatting.mjs",
     "verify:font-weight": "node scripts/verify-font-weight.mjs",
     "verify:graphic-regions": "node scripts/verify-graphic-regions.mjs",
     "verify:posbox-click": "node scripts/verify-posbox-click.mjs",

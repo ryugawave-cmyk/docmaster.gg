@@ -37,6 +37,12 @@ export async function docxToBlockModel(buf, title = 'Document') {
   // Styles carry the document defaults (font/size/spacing) and named paragraph
   // styles (Heading 1…, etc.). Real-world .docx put most formatting there rather
   // than inline, so resolving them is what keeps sizes and spacing faithful.
+  // Theme (theme1.xml) resolves w:themeColor (e.g. accent1) and theme fonts
+  // (majorHAnsi/minorHAnsi) that Word's built-in heading styles reference — without
+  // it, a blue themed heading and the document's theme body font are lost. Parse it
+  // BEFORE styles, since style rPr colours/fonts resolve through it.
+  const themeXml = files.get('word/theme/theme1.xml');
+  curTheme = themeXml ? parseTheme(dec.decode(themeXml)) : { colors: {}, fonts: {} };
   const stylesXml = files.get('word/styles.xml');
   const styleInfo = stylesXml ? parseStyles(dec.decode(stylesXml)) : { def: {}, byId: {} };
 
@@ -304,6 +310,88 @@ function reconstructPositioned(body, files, rels, title) {
   return doc;
 }
 
+/* ------------------------------ theme (colours / fonts) ------------------------ */
+
+// The active document theme, set per-import in docxToBlockModel BEFORE styles are
+// parsed (style rPr colours/fonts resolve through it). `colors` maps clrScheme slot
+// names (dk1/lt1/dk2/lt2/accent1..6/hlink/folHlink) → '#rrggbb'; `fonts` = { major, minor }.
+let curTheme = { colors: {}, fonts: {} };
+
+/** Parse theme1.xml → { colors:{slot:'#rrggbb'}, fonts:{major,minor} }. Best-effort. */
+function parseTheme(text) {
+  const out = { colors: {}, fonts: {} };
+  try {
+    const xml = new DOMParser().parseFromString(text, 'application/xml');
+    const clr = xml.getElementsByTagName('a:clrScheme')[0] || xml.getElementsByTagName('clrScheme')[0];
+    if (clr) {
+      for (const slot of Array.from(clr.children)) {
+        const name = local(slot.tagName);              // dk1, lt1, accent1, hlink, …
+        const srgb = child(slot, 'srgbClr');
+        const sys = child(slot, 'sysClr');
+        const hex = (srgb && attr(srgb, 'val')) || (sys && (attr(sys, 'lastClr') || attr(sys, 'val')));
+        if (hex) out.colors[name] = `#${hex.replace(/^#/, '')}`;
+      }
+    }
+    const fs = xml.getElementsByTagName('a:fontScheme')[0] || xml.getElementsByTagName('fontScheme')[0];
+    if (fs) {
+      const latinOf = (grp) => { const l = grp && child(grp, 'latin'); return l ? attr(l, 'typeface') : null; };
+      const mj = latinOf(child(fs, 'majorFont')); if (mj) out.fonts.major = mj;
+      const mn = latinOf(child(fs, 'minorFont')); if (mn) out.fonts.minor = mn;
+    }
+  } catch { /* leave theme empty */ }
+  return out;
+}
+
+/** A w:themeColor attribute value (accent1, text1, hyperlink, …) → its theme '#rrggbb'. */
+function themeColorHex(name) {
+  if (!name) return null;
+  const map = {
+    text1: 'dk1', background1: 'lt1', text2: 'dk2', background2: 'lt2',
+    dark1: 'dk1', light1: 'lt1', dark2: 'dk2', light2: 'lt2',
+    hyperlink: 'hlink', followedhyperlink: 'folHlink',
+  };
+  const key = map[name.toLowerCase()] || name;        // accent1..6/dk1/… pass through
+  return curTheme.colors[key] || curTheme.colors[name] || null;
+}
+
+/** Apply a w:themeShade (toward black) or w:themeTint (toward white) — both hex 00–FF. */
+function applyShadeTint(hex, shade, tint) {
+  const h = hex.replace(/^#/, '');
+  let r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  if (shade) { const f = parseInt(shade, 16) / 255; r *= f; g *= f; b *= f; }
+  else if (tint) { const f = parseInt(tint, 16) / 255; r = r * f + 255 * (1 - f); g = g * f + 255 * (1 - f); b = b * f + 255 * (1 - f); }
+  const hh = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${hh(r)}${hh(g)}${hh(b)}`;
+}
+
+/** Resolve a `<w:color>` element to '#rrggbb', honouring an explicit w:val, a themed
+ *  colour (w:themeColor + optional shade/tint), or null for automatic/none. */
+function resolveColorEl(colorEl) {
+  if (!colorEl) return null;
+  const val = attr(colorEl, 'w:val');
+  if (val && val !== 'auto') return `#${val.replace(/^#/, '')}`; // Word pre-resolves themed vals here
+  const theme = attr(colorEl, 'w:themeColor');
+  if (theme) {
+    const base = themeColorHex(theme);
+    if (base) {
+      const shade = attr(colorEl, 'w:themeShade'), tint = attr(colorEl, 'w:themeTint');
+      return (shade || tint) ? applyShadeTint(base, shade, tint) : base;
+    }
+  }
+  return null; // 'auto'/none → let the model default apply
+}
+
+/** Resolve a `<w:rFonts>` element to a family name: an explicit ascii/hAnsi face, or a
+ *  theme face (majorHAnsi/minorHAnsi/… → the theme's major/minor font). */
+function resolveFontEl(f) {
+  if (!f) return null;
+  const explicit = attr(f, 'w:ascii') || attr(f, 'w:hAnsi');
+  if (explicit) return explicit;
+  const theme = attr(f, 'w:asciiTheme') || attr(f, 'w:hAnsiTheme');
+  if (theme) return /major/i.test(theme) ? (curTheme.fonts.major || null) : (curTheme.fonts.minor || null);
+  return null;
+}
+
 /* ------------------------- styles / section setup ------------------------- */
 
 /** Parse styles.xml into { def, byId }: document defaults and per-style formatting
@@ -342,14 +430,19 @@ function styleChain(styleInfo, id, depth = 0) {
   return { ...styleChain(styleInfo, basedOn, depth + 1), ...own };
 }
 
-/** { sizePx?, fontFamily? } from an rPr (run properties). */
+/** { sizePx?, fontFamily?, color? } from an rPr (run properties) — used for document
+ *  defaults and named styles, so a heading's colour/font/size defined in its STYLE
+ *  (the common case) is inherited by its runs instead of collapsing to the model
+ *  default (black / Inter). Theme colours and theme fonts are resolved here too. */
 function readRunDefaults(rpr) {
   if (!rpr) return {};
   const o = {};
   const sz = attr(child(rpr, 'sz'), 'w:val');
   if (sz) o.sizePx = Math.round(HALFPT_TO_PX(sz));
-  const f = child(rpr, 'rFonts');
-  if (f) { const name = attr(f, 'w:ascii') || attr(f, 'w:hAnsi'); if (name) o.fontFamily = name; }
+  const fam = resolveFontEl(child(rpr, 'rFonts'));
+  if (fam) o.fontFamily = fam;
+  const col = resolveColorEl(child(rpr, 'color'));
+  if (col) o.color = col;
   return o;
 }
 
@@ -430,6 +523,7 @@ function readParagraph(pNode, files, rels, bodySize = 16, styleInfo = { def: {},
   const defaults = {
     fontSize: eff.sizePx || undefined,
     fontFamily: eff.fontFamily || undefined,
+    color: eff.color || undefined,
   };
   const runs = readRuns(pNode, files, rels, defaults);
   // Heading level: prefer an explicit Word style / outline level; otherwise infer
@@ -549,16 +643,17 @@ function readMarks(rPr, defaults = {}) {
     if (u && attr(u, 'w:val') && attr(u, 'w:val') !== 'none') m.underline = true;
     const sz = attr(child(rPr, 'sz'), 'w:val');
     if (sz) m.fontSize = Math.round(HALFPT_TO_PX(sz));
-    const color = attr(child(rPr, 'color'), 'w:val');
-    if (color && color !== 'auto') m.color = `#${color.replace(/^#/, '')}`;
-    const font = child(rPr, 'rFonts');
-    if (font) { const f = attr(font, 'w:ascii') || attr(font, 'w:hAnsi'); if (f) m.fontFamily = f; }
+    const color = resolveColorEl(child(rPr, 'color'));   // explicit or themed
+    if (color) m.color = color;
+    const fam = resolveFontEl(child(rPr, 'rFonts'));      // explicit or theme font
+    if (fam) m.fontFamily = fam;
   }
-  // Fall back to the paragraph/style/document default so a run that inherits its
-  // size (very common — Word rarely repeats it inline) still renders at the right
-  // size instead of collapsing to the model's generic default.
+  // Fall back to the paragraph/style/document default so a run that inherits its size,
+  // font or COLOUR (very common — Word keeps heading colour in the style, not inline)
+  // still renders faithfully instead of collapsing to the model's generic default.
   if (m.fontSize == null && defaults.fontSize) m.fontSize = defaults.fontSize;
   if (m.fontFamily == null && defaults.fontFamily) m.fontFamily = defaults.fontFamily;
+  if (m.color == null && defaults.color) m.color = defaults.color;
   return m;
 }
 
