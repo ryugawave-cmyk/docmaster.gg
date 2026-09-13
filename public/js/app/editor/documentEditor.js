@@ -55,6 +55,50 @@ export function breakInPosbox(range, box) {
   return r;
 }
 
+/**
+ * Keep a positioned text box (`.doc-posbox`) wide enough to hold its line on ONE row.
+ *
+ * A posbox is ONE PDF line whose width came from the PDF's own (narrower) embedded-font
+ * ink extent (services/convert/positionedImport). The editor draws the line in a
+ * SUBSTITUTE font that is a touch wider, so a wrapping (paragraph) box re-wraps its last
+ * word onto a 2nd row the instant it's revealed — the reported "paragraph width shrinks /
+ * text reflows when I click it" bug. (The import-time width fit measures with a canvas
+ * BEFORE the web font has loaded, so it under-measures; measuring the LIVE box here — the
+ * real font already applied — is exact.)
+ *
+ * Measure the content's natural single-line width (temporarily `nowrap` + `auto`) and GROW
+ * the box to it, capped at the page's right edge. GROW-ONLY: a box already wide enough is
+ * left untouched, so it's idempotent and a late-loading font just converges on re-reveal.
+ * Narrow `nowrap` boxes (table labels/values) are skipped — widening their opaque mask
+ * fill would spill over the neighbouring cell. Exported so it can be verified in a DOM.
+ *
+ * @param {HTMLElement} box the `.doc-posbox`
+ * @param {number} pageWidth the page width in px (0 = unknown → no right-edge cap)
+ * @returns {number} the box's width (px) after fitting
+ */
+export function fitPosboxWidthEl(box, pageWidth) {
+  if (!box || box.dataset.nowrap === '1') return box ? (parseFloat(box.style.width) || box.offsetWidth || 0) : 0;
+  const cur = parseFloat(box.style.width) || box.offsetWidth || 0;
+  const prevWS = box.style.whiteSpace;
+  const prevW = box.style.width;
+  box.style.whiteSpace = 'nowrap';
+  box.style.width = 'auto';                          // shrink-to-fit → offsetWidth = 1-line width
+  const natural = box.offsetWidth;
+  box.style.whiteSpace = prevWS || '';
+  box.style.width = prevW || '';
+  if (!(natural > 0)) return cur;
+  const x = parseFloat(box.style.left) || 0;
+  const maxW = Math.max(cur, pageWidth ? pageWidth - x - 2 : cur); // never run off the sheet
+  const target = Math.min(natural + 2, maxW);                       // +2 guards rounding/caret
+  if (target > cur + 0.5) {
+    const w = Math.round(target);
+    box.style.width = `${w}px`;
+    box.dataset.w = String(w);                       // keep dataset (readPosbox fallback) in sync
+    return w;
+  }
+  return cur;
+}
+
 export function createDocumentEditor({ container, onChange, onSelection, onPaginate, onRequestHfSettings }) {
   container.classList.add('doc-editor');
   const scroll = el('div', { class: 'doc-editor-scroll' });
@@ -1479,14 +1523,20 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
   // until focused — click it to reveal + edit. On blur it re-hides UNLESS it was
   // edited, so untouched fields stay pixel-exact while edited ones keep their change.
   page.addEventListener('focusin', (e) => {
-    const box = e.target && e.target.closest && e.target.closest('.doc-posbox--dormant');
-    if (box) box.classList.remove('doc-posbox--dormant');
+    const box = e.target && e.target.closest && e.target.closest('.doc-posbox');
+    if (!box) return;
+    box.classList.remove('doc-posbox--dormant');
+    fitPosboxWidth(box);
   });
   page.addEventListener('focusout', (e) => {
     const box = e.target && e.target.closest && e.target.closest('.doc-posbox');
     // `revealed` boxes (erased-raster re-import) are always visible — never re-dorm them.
     if (box && box.dataset.edited !== '1' && box.dataset.revealed !== '1') box.classList.add('doc-posbox--dormant');
   });
+
+  function fitPosboxWidth(box) {
+    if (base && base.layout === 'positioned') fitPosboxWidthEl(box, (base.page && base.page.width) || 0);
+  }
 
   // Click an image to select it (show resize handles); click anywhere else to
   // deselect. Handle drags stopPropagation, so they never reach this listener.
