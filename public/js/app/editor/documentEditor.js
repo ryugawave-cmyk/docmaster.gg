@@ -21,6 +21,40 @@ import { shapeSvg, shapeHasFill } from './shapeLibrary.js';
 import { renderChartSvg, normalizeChart, sampleChart, TYPE_META, CHART_CATALOG, chartTypeLabel, PALETTES, PALETTE_IDS, PER_POINT_FAMILIES } from './chartRender.js';
 import { openChartDataEditor } from './chartDataEditor.js';
 
+/**
+ * Insert a line break at the caret INSIDE a positioned text box (`.doc-posbox`),
+ * preserving every existing character. Positioned (exact-layout) docs pin each box
+ * to absolute page coordinates, so the normal paragraph split — which extracts the
+ * post-caret content into a NEW sibling flow block — would tear that text out of the
+ * positioned layer: the box empties and the line appears to vanish. Keeping the break
+ * inside the one box is lossless; the box simply grows a line.
+ *
+ * Returns a collapsed Range sitting on the new line (the caller installs it as the
+ * selection). Exported so it can be verified against a real DOM.
+ *
+ * @param {Range} range collapsed (or not) caret range inside `box`
+ * @param {HTMLElement} box the `.doc-posbox` element
+ * @returns {Range}
+ */
+export function breakInPosbox(range, box) {
+  if (!range.collapsed) range.deleteContents();
+  const br = document.createElement('br');
+  range.insertNode(br);
+  // A lone <br> at the very END of the box renders nothing after it in most engines,
+  // so the caret can't sit on the new line. Add a trailing <br> only in that case;
+  // when real content follows the break (a mid-line split) it's left untouched.
+  let hasFollowing = false;
+  for (let n = br.nextSibling; n; n = n.nextSibling) {
+    const rendered = n.nodeName === 'BR' || (n.nodeType === 3 ? n.nodeValue.length : (n.textContent || '').length);
+    if (rendered) { hasFollowing = true; break; }
+  }
+  if (!hasFollowing) br.after(document.createElement('br'));
+  const r = document.createRange();
+  r.setStartAfter(br);
+  r.collapse(true);
+  return r;
+}
+
 export function createDocumentEditor({ container, onChange, onSelection, onPaginate, onRequestHfSettings }) {
   container.classList.add('doc-editor');
   const scroll = el('div', { class: 'doc-editor-scroll' });
@@ -1573,6 +1607,24 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     if (!sel || !sel.rangeCount) return;
     const range = sel.getRangeAt(0);
     if (!editRoot.contains(range.startContainer)) return;
+
+    // Positioned (exact-layout) docs: the caret's "block" is a `.doc-posbox` pinned to
+    // page coordinates. The flow split below would extract the post-caret content into
+    // a NEW sibling flow <div>, tearing text out of the positioned box — the box empties
+    // and the line "disappears" (the reported bug). Break INSIDE the box instead:
+    // lossless, the caret lands on the new line, and the box just grows a line.
+    const host = blockOf(range.startContainer);
+    if (host && host.classList && host.classList.contains('doc-posbox')) {
+      const r = breakInPosbox(range, host);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      host.dataset.edited = '1';                       // keep it revealed once edited
+      host.classList.remove('doc-posbox--dormant');
+      commit();
+      emitSelection();
+      return;
+    }
+
     if (!range.collapsed) range.deleteContents();
 
     const block = blockOf(range.startContainer);

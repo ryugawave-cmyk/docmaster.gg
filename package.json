@@ -18,6 +18,7 @@
     "verify:font-weight": "node scripts/verify-font-weight.mjs",
     "verify:graphic-regions": "node scripts/verify-graphic-regions.mjs",
     "verify:posbox-click": "node scripts/verify-posbox-click.mjs",
+    "verify:posbox-enter": "node scripts/verify-posbox-enter.mjs",
     "verify:posbox-fit": "node scripts/verify-posbox-fit.mjs",
     "verify:positioned-docx": "node scripts/verify-positioned-docx.mjs",
     "verify:positioned-roundtrip": "node scripts/verify-positioned-roundtrip.mjs",
