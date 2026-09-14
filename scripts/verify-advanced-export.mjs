@@ -3,9 +3,9 @@
  *
  *  • Highlight now renders in Document → PDF (a filled rect behind the run) and
  *    Document → PowerPoint (<a:highlight>), matching Quick Export's DOCX highlight.
- *  • Document → JPG/PNG now always produces a SINGLE image file — a multi-page
- *    document is stitched into one tall image instead of a ZIP of page images —
- *    at full quality (PNG lossless / JPG max).
+ *  • Document → JPG/PNG renders each page INDEPENDENTLY to its own image file
+ *    (name_page_1.jpg, name_page_2.jpg, …) at full quality — never one long
+ *    stitched image and never a ZIP.
  *
  * Drives the REAL exporters in Edge (Blob / canvas / PDF.js are browser-only).
  * Best-effort: prints SKIPPED (exit 0) if Edge can't launch.
@@ -52,15 +52,21 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><body><script type="module"
   };
 
   window.runImages = async (format) => {
-    // Many paragraphs → more than one page, so the old path would have produced a ZIP.
+    // Many paragraphs → more than one page: expect ONE image file PER PAGE.
     const blocks = [];
     for (let i = 0; i < 80; i += 1) blocks.push(para([run('Lorem ipsum dolor sit amet, consectetur adipiscing elit. ' + i)]));
     const res = await blockModelToImages({ title: 't', page, blocks }, { format });
-    const bytes = new Uint8Array(await res.blob.arrayBuffer());
-    const pngSig = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
-    const jpgSig = bytes[0] === 0xff && bytes[1] === 0xd8;
-    const zipSig = bytes[0] === 0x50 && bytes[1] === 0x4b; // "PK" — must NOT be this
-    return { type: res.blob.type, filename: res.filename, count: res.count, pngSig, jpgSig, zipSig };
+    const files = [];
+    for (const f of res.files) {
+      const b = new Uint8Array(await f.blob.arrayBuffer());
+      files.push({
+        filename: f.filename, type: f.blob.type,
+        pngSig: b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
+        jpgSig: b[0] === 0xff && b[1] === 0xd8,
+        zipSig: b[0] === 0x50 && b[1] === 0x4b, // "PK" — must NOT be this
+      });
+    }
+    return { count: res.count, files };
   };
 </script></body>`;
 
@@ -106,13 +112,15 @@ try {
   check('PPTX export writes <a:highlight> for the run', pptx.hasHighlight);
 
   const png = await page.evaluate(() => window.runImages('png'));
-  check('multi-page PNG is ONE image, not a zip', png.type === 'image/png' && png.pngSig && !png.zipSig);
-  check('multi-page PNG filename is .png (not .zip)', /\.png$/.test(png.filename) && !/\.zip$/.test(png.filename));
-  check('PNG export actually spanned multiple pages', png.count >= 2);
+  check('PNG export spanned multiple pages', png.count >= 2);
+  check('PNG export produced one file PER page', png.files.length === png.count);
+  check('each PNG page is a real image, not a zip', png.files.every((f) => f.type === 'image/png' && f.pngSig && !f.zipSig));
+  check('PNG page filenames are name_page_N.png', png.files.every((f, i) => new RegExp(`_page_${i + 1}\\.png$`).test(f.filename)));
 
   const jpg = await page.evaluate(() => window.runImages('jpg'));
-  check('multi-page JPG is ONE image, not a zip', jpg.type === 'image/jpeg' && jpg.jpgSig && !jpg.zipSig);
-  check('multi-page JPG filename is .jpg (not .zip)', /\.jpg$/.test(jpg.filename) && !/\.zip$/.test(jpg.filename));
+  check('JPG export produced one file PER page', jpg.files.length === jpg.count && jpg.count >= 2);
+  check('each JPG page is a real image, not a zip', jpg.files.every((f) => f.type === 'image/jpeg' && f.jpgSig && !f.zipSig));
+  check('JPG page filenames are name_page_N.jpg', jpg.files.every((f, i) => new RegExp(`_page_${i + 1}\\.jpg$`).test(f.filename)));
 } catch (e) {
   console.log('SKIPPED:', String(e.message || e).split('\n')[0]);
   if (browser) await browser.close();

@@ -55,7 +55,11 @@ export async function blockModelToImages(doc, {
   const data = new Uint8Array(await pdfBlob.arrayBuffer());
   const pdf = await getDocument({ data, ...PDF_DOCUMENT_DEFAULTS }).promise;
 
-  const canvases = [];
+  // Render each page INDEPENDENTLY to its own image, honouring page boundaries — never
+  // one long image of the whole document. Each PDF page (one document page) is rasterised
+  // at its own dimensions and encoded as a separate file (full quality: PNG lossless /
+  // JPG max). The caller downloads each file; a single-page doc yields exactly one file.
+  const files = [];
   try {
     const total = pdf.numPages;
     for (let i = 1; i <= total; i += 1) {
@@ -63,14 +67,17 @@ export async function blockModelToImages(doc, {
       const page = await pdf.getPage(i);
       const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.ceil(viewport.width));
-      canvas.height = Math.max(1, Math.ceil(viewport.height));
+      canvas.width = Math.max(1, Math.ceil(viewport.width));   // ONE page's width…
+      canvas.height = Math.max(1, Math.ceil(viewport.height)); // …and ONE page's height
       const ctx = canvas.getContext('2d');
       // JPEG has no alpha, and pages should print on white regardless of theme.
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport, background: '#ffffff' }).promise;
-      canvases.push(canvas);
+      const blob = await canvasToBlob(canvas, mime, quality);
+      // Single page → "name.ext"; multi-page → "name_page_1.ext", "name_page_2.ext", …
+      const filename = total === 1 ? `${base}.${ext}` : `${base}_page_${i}.${ext}`;
+      files.push({ blob, filename });
       if (page.cleanup) page.cleanup();
     }
     if (onProgress) onProgress(total, total);
@@ -78,44 +85,8 @@ export async function blockModelToImages(doc, {
     if (pdf.destroy) pdf.destroy();
   }
 
-  // Always emit ONE image file — never a zip. A single page is encoded directly; a
-  // multi-page document is stitched into one tall image (pages stacked with a thin
-  // white gutter). Full quality is kept (PNG lossless / JPG max) unless the stack would
-  // exceed the browser's canvas dimension limit, when it's scaled down just enough to
-  // fit — the only case any resolution is traded, and only for very long documents.
-  const single = canvases.length === 1 ? canvases[0] : stitchVertical(canvases);
-  const blob = await canvasToBlob(single, mime, quality);
-  const n = canvases.length;
-  return { blob, filename: `${base}.${ext}`, count: n, extra: n === 1 ? '1 page' : `${n} pages` };
-}
-
-// Longest side a canvas may have before browsers refuse to allocate/paint it. Stay
-// well under the common 32767px hard limit so a stitched multi-page image is valid.
-const MAX_CANVAS_SIDE = 30000;
-
-/** Stack page canvases into ONE tall canvas (thin white gutter between pages), scaled
- *  down only if the total height would exceed the canvas dimension limit. */
-function stitchVertical(canvases) {
-  const gap = Math.round(16 * (window.devicePixelRatio || 1));
-  const width = Math.max(...canvases.map((c) => c.width));
-  const rawH = canvases.reduce((a, c) => a + c.height, 0) + gap * (canvases.length - 1);
-  const s = Math.min(1, MAX_CANVAS_SIDE / rawH, MAX_CANVAS_SIDE / width);
-  const out = document.createElement('canvas');
-  out.width = Math.max(1, Math.round(width * s));
-  out.height = Math.max(1, Math.round(rawH * s));
-  const ctx = out.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, out.width, out.height);
-  let y = 0;
-  for (const c of canvases) {
-    const dw = Math.round(c.width * s), dh = Math.round(c.height * s);
-    const dx = Math.round(((width - c.width) / 2) * s); // centre if widths differ
-    ctx.drawImage(c, Math.max(0, dx), Math.round(y * s), dw, dh);
-    y += c.height + gap;
-  }
-  return out;
+  const n = files.length;
+  return { files, count: n, extra: n === 1 ? '1 page' : `${n} pages` };
 }
 
 function canvasToBlob(canvas, mime, quality) {

@@ -375,11 +375,20 @@ export function createDocExportPanel({ getModel, getDocName, downloadBlob, toast
     setWorking('Preparing…');
     try {
       const out = await tool.run({ model, name, base, onProgress: (m) => setWorking(m) });
-      if (!out || !(out.blob instanceof Blob)) { setBusy(false); setError('Nothing was produced.'); return; }
-      downloadBlob(out.blob, out.filename);
+      // A tool returns either a single { blob, filename } or, for page images, a list
+      // of { blob, filename } — one file PER PAGE, each downloaded separately (no zip).
+      const files = out && Array.isArray(out.files) ? out.files
+        : (out && out.blob instanceof Blob ? [{ blob: out.blob, filename: out.filename }] : null);
+      if (!files || !files.length) { setBusy(false); setError('Nothing was produced.'); return; }
+      for (const f of files) downloadBlob(f.blob, f.filename);
       setBusy(false);
-      setDone(out);
-      toast?.(`Exported ${out.filename}`);
+      if (files.length === 1) {
+        setDone({ filename: files[0].filename, extra: out.extra });
+        toast?.(`Exported ${files[0].filename}`);
+      } else {
+        setDone({ filename: `${files.length} page images`, extra: out.extra });
+        toast?.(`Exported ${files.length} images`);
+      }
     } catch (err) {
       console.error('[doc-export]', tool.id, err);
       setBusy(false);
