@@ -769,10 +769,17 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
   const imageData = await decodeImages(doc, imageQuality);
   const pageWpt = (doc.page?.width || 816) * PX_TO_PT;
   const pageHpt = (doc.page?.height || 1056) * PX_TO_PT;
-  const marginPt = (doc.page?.margin || 72) * PX_TO_PT;
-  const contentWpx = (doc.page?.width || 816) - (doc.page?.margin || 72) * 2;
+  // Per-side margins (px), matching the editor's paginate() — using a single margin
+  // for top/bottom (as before) made the exporter's usable page height differ from the
+  // editor's whenever a document's top/bottom margins weren't equal to its left, so the
+  // PDF's page breaks (and page count) drifted from what the editor shows.
+  const mAll = doc.page?.margin ?? 72;
+  const pm = doc.page?.margins || {};
+  const mTopPx = pm.top ?? mAll, mBottomPx = pm.bottom ?? mAll, mLeftPx = pm.left ?? mAll, mRightPx = pm.right ?? mAll;
+  const mTopPt = mTopPx * PX_TO_PT, mBottomPt = mBottomPx * PX_TO_PT, mLeftPt = mLeftPx * PX_TO_PT;
+  const contentWpx = (doc.page?.width || 816) - mLeftPx - mRightPx;
   const pageHpx = doc.page?.height || 1056;
-  const marginPx = doc.page?.margin || 72;
+  const marginPx = mLeftPx; // back-compat alias for left-edge uses below
 
   // Running head/foot: each page reserves vertical space for its header (top) and
   // footer (bottom) so body text never overlaps them — mirroring the editor. The
@@ -784,18 +791,18 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
     if (hfIsEmpty(blocks)) return 0;
     return hfLinesFor(blocks, contentWpx, 1, 1).reduce((a, l) => a + l.lineHeightPx, 0);
   }
-  const reservePx = (cfg, kind) => {
+  const reservePx = (cfg, kind, edgeMarginPx) => {
     const h = hfKindHeightPx(cfg, kind);
-    return h ? Math.max(0, cfg.distance + h + HF_GAP - marginPx) : 0;
+    return h ? Math.max(0, cfg.distance + h + HF_GAP - edgeMarginPx) : 0;
   };
-  const headerReservePx = (idx) => reservePx(headerCfg, hfKindFor(headerCfg, idx));
-  const footerReservePx = (idx) => reservePx(footerCfg, hfKindFor(footerCfg, idx));
+  const headerReservePx = (idx) => reservePx(headerCfg, hfKindFor(headerCfg, idx), mTopPx);
+  const footerReservePx = (idx) => reservePx(footerCfg, hfKindFor(footerCfg, idx), mBottomPx);
 
   const pages = [];       // each: { ops:string[], images:[{name,bytes,w,h}] }
   let ops = [];
   let images = [];
   let curPageIdx = 0;     // 0-based index of the page currently being laid out
-  let y = pageHpt - marginPt - headerReservePx(0) * PX_TO_PT;   // baseline cursor
+  let y = pageHpt - mTopPt - headerReservePx(0) * PX_TO_PT;   // baseline cursor
   const fontsUsed = new Set();
 
   // A left/right side-wrapped image reserves a rectangular column so following
@@ -808,10 +815,13 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
     pages.push({ ops, images });
     ops = []; images = [];
     curPageIdx = pages.length;
-    y = pageHpt - marginPt - headerReservePx(curPageIdx) * PX_TO_PT;
+    y = pageHpt - mTopPt - headerReservePx(curPageIdx) * PX_TO_PT;
     activeFloat = null;
   };
-  const need = (h) => { if (y - h < marginPt + footerReservePx(curPageIdx) * PX_TO_PT) newPage(); };
+  const need = (h) => { if (y - h < mBottomPt + footerReservePx(curPageIdx) * PX_TO_PT) newPage(); };
+  // The y a fresh page starts its body at (used to detect "page already has content"
+  // so a forced break doesn't waste a blank page). Mirrors the editor's contentTop.
+  const pageTopY = () => pageHpt - mTopPt - headerReservePx(curPageIdx) * PX_TO_PT;
 
   /** Left edge + available width (px) for a line whose baseline sits at `atY`,
    *  shrunk by an active side-float while the baseline is within its vertical band. */
@@ -917,6 +927,14 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
 
   for (const block of (doc.blocks || [])) {
     try {
+      // Forced page break BEFORE this block (imported Word/PDF page boundary): start a
+      // fresh page unless this page is still empty — exactly what the editor's paginate()
+      // does. Without this the PDF ignored every source page break, so its page count
+      // drifted from the editor's (a 6-page editor doc exported as 4, etc.). A floating
+      // image is out of flow, so a break never lands on it (the importer already avoids
+      // tagging one, but guard anyway).
+      const isFloatingImg = block.type === 'image' && block.left != null && block.top != null;
+      if (block.breakBefore && !isFloatingImg && y < pageTopY() - 1) newPage();
       if (block.type === 'image') {
         // A dragged (front/behind) image carries absolute page coordinates — draw it
         // there WITHOUT consuming vertical flow (mirrors the DOCX anchored fix).
@@ -1130,7 +1148,7 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
           const right = c < cols ? at(ri, c) : null;
           if (left && right && left === right) continue;
           if (has(left && left.cell, 'r') || has(right && right.cell, 'l')) continue;
-          const xPt = marginPt + colXpx[c] * PX_TO_PT;
+          const xPt = mLeftPt + colXpx[c] * PX_TO_PT;
           ops.push(`${stroke} ${round(xPt)} ${round(top)} m ${round(xPt)} ${round(bottom)} l S`);
         }
         // Horizontal top edges — skip where a master spans down across the line.
@@ -1139,15 +1157,15 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
           const above = at(ri - 1, ci);
           if (cur && above && cur === above) continue;
           if (has(cur && cur.cell, 't') || has(above && above.cell, 'b')) continue;
-          const x0 = marginPt + colXpx[ci] * PX_TO_PT;
-          const x1 = marginPt + colXpx[ci + 1] * PX_TO_PT;
+          const x0 = mLeftPt + colXpx[ci] * PX_TO_PT;
+          const x1 = mLeftPt + colXpx[ci + 1] * PX_TO_PT;
           ops.push(`${stroke} ${round(x0)} ${round(top)} m ${round(x1)} ${round(top)} l S`);
         }
         if (ri === nrows - 1) {
           for (let ci = 0; ci < cols; ci += 1) {
             if (has(at(ri, ci) && at(ri, ci).cell, 'b')) continue;
-            const x0 = marginPt + colXpx[ci] * PX_TO_PT;
-            const x1 = marginPt + colXpx[ci + 1] * PX_TO_PT;
+            const x0 = mLeftPt + colXpx[ci] * PX_TO_PT;
+            const x1 = mLeftPt + colXpx[ci + 1] * PX_TO_PT;
             ops.push(`${stroke} ${round(x0)} ${round(bottom)} m ${round(x1)} ${round(bottom)} l S`);
           }
         }
@@ -1159,7 +1177,7 @@ export async function blockModelToPdf(doc, { imageQuality = 0.85 } = {}) {
         let ty = top - padPx * PX_TO_PT;
         for (const segLine of linesOf.get(m)) {
           ty -= 18 * PX_TO_PT;
-          let xPx = (doc.page?.margin || 72) + colXpx[ci] + padPx;
+          let xPx = mLeftPx + colXpx[ci] + padPx;
           for (const seg of segLine) {
             const mk = seg.marks; const rec = pickFont(fonts, mk); fontsUsed.add(rec);
             const [r, g, b] = hexToRgb(mk.color);
