@@ -35,6 +35,10 @@ function blockToEl(block) {
   // boundary): the pagination engine pushes it to the top of the next page so
   // the document keeps the source's page count instead of reflowing freely.
   if (block.breakBefore) el.classList.add('doc-break-before');
+  // A section change starting at this block (imported multi-section .docx): carry the
+  // section's page size/margins so it survives editing / save / reload (and is there
+  // for a per-section renderer or exporter). Serialized as JSON on a data attribute.
+  if (block.pageOverride) { try { el.dataset.pageOverride = JSON.stringify(block.pageOverride); } catch { /* ignore */ } }
   return el;
 }
 
@@ -271,9 +275,16 @@ function tableToEl(block) {
 
 function applyBlockStyle(el, style = {}) {
   if (style.align) el.style.textAlign = style.align;
-  if (style.lineHeight) el.style.lineHeight = String(style.lineHeight);
+  // Exact/atLeast line rule (px) wins over a multiple. Honouring it matters for
+  // pagination: a doc set to "Exactly 12pt" would otherwise inherit the CSS 1.5
+  // default (.doc-block) and every line would be ~50% taller than the source.
+  if (style.lineHeightPx != null) el.style.lineHeight = `${style.lineHeightPx}px`;
+  else if (style.lineHeight) el.style.lineHeight = String(style.lineHeight);
   if (style.spaceBefore != null) el.style.marginTop = `${style.spaceBefore}px`;
   if (style.spaceAfter != null) el.style.marginBottom = `${style.spaceAfter}px`;
+  // Left indent (px) narrows the text column, so honouring it keeps wrapping — and
+  // therefore line count — the same as the source.
+  if (style.indentLeft) el.style.marginLeft = `${style.indentLeft}px`;
 }
 
 /* ------------------------------- DOM → model ------------------------------ */
@@ -290,6 +301,8 @@ export function readBlocks(rootEl) {
     else blk = readParagraph(el);
     // Preserve a forced page break so it survives edits, save/reload and export.
     if (el.classList.contains('doc-break-before')) blk.breakBefore = true;
+    // Preserve an imported section's page setup (see blockToEl).
+    if (el.dataset.pageOverride) { try { blk.pageOverride = JSON.parse(el.dataset.pageOverride); } catch { /* ignore */ } }
     blocks.push(blk);
   }
   return blocks.length ? blocks : [{ type: 'paragraph', tag: 'p', style: {}, runs: [createRun('')] }];
@@ -344,12 +357,19 @@ function rgbaFromHex(hex, a) {
 
 function readBlockStyle(el) {
   const cs = getComputedStyle(el);
-  return {
+  const style = {
     align: el.style.textAlign || (cs.textAlign === 'start' ? 'left' : cs.textAlign) || 'left',
-    lineHeight: parseFloat(el.style.lineHeight) || round2(parseFloat(cs.lineHeight) / parseFloat(cs.fontSize)) || 1.4,
     spaceBefore: parseFloat(el.style.marginTop) || 0,
     spaceAfter: parseFloat(el.style.marginBottom) || 10,
   };
+  // An exact (px) line height set inline (imported "Exactly Npt" spacing) round-trips
+  // as lineHeightPx; a unitless multiple stays a multiple. Reading a px value as a
+  // bare number would corrupt it (e.g. "12px" → line-height:12), so branch on the unit.
+  if (/px$/.test(el.style.lineHeight)) style.lineHeightPx = parseFloat(el.style.lineHeight) || undefined;
+  else style.lineHeight = parseFloat(el.style.lineHeight) || round2(parseFloat(cs.lineHeight) / parseFloat(cs.fontSize)) || 1.4;
+  const indent = parseFloat(el.style.marginLeft) || 0;
+  if (indent) style.indentLeft = indent;
+  return style;
 }
 
 // Non-printable / placeholder characters that carry no meaning in body text but

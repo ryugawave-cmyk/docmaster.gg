@@ -18,6 +18,26 @@ import { fitBoxFontToInk } from './positionedImport.js';
 
 const PT_TO_PX = 96 / 72;
 const EMU_PER_PX = 9525;                 // OOXML EMU per CSS px @96dpi
+// Word's real defaults for a paragraph that carries NO explicit size / spacing, so
+// imported text is laid out with Word-like metrics instead of the editor's larger
+// "web document" defaults (Inter 16px / line-height 1.4 / 10px after). Getting these
+// right is what keeps the imported page COUNT close to the source: the wrong defaults
+// inflate every line by ~40% and add a margin after every paragraph, which is what
+// turned a 6-page Word file into ~18 editor pages. See readParagraph.
+const WORD_DEFAULT_SIZE_PX = Math.round(11 * PT_TO_PX); // 11pt (Calibri body) ≈ 15px
+const WORD_DEFAULT_LINE = 1.15;                          // Word "single" renders ≈1.15
+
+/** Debug logging (page size / margins / font sizes / line-heights / image dims) to
+ *  diagnose why an import's page count differs from the source. Off by default; turn
+ *  on with `localStorage.DOCX_DEBUG = '1'` (browser) or `globalThis.__DOCX_DEBUG = true`. */
+function docxDebugOn() {
+  try { if (globalThis.__DOCX_DEBUG) return true; } catch { /* no global */ }
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem('DOCX_DEBUG') === '1'; } catch { return false; }
+}
+function dbg(...args) { if (docxDebugOn()) { try { console.log('[docx-import]', ...args); } catch { /* ignore */ } } }
+// Cap the per-paragraph debug lines so a long document doesn't flood the console;
+// reset at the start of each import (see docxToBlockModel).
+let dbgParaBudget = 0;
 // Word's 16 named highlight (marker) colours → hex, so an imported <w:highlight> maps
 // back to the editor's background-colour highlight model. See blockExport for the inverse.
 const HIGHLIGHT_HEX = {
@@ -83,13 +103,40 @@ export async function docxToBlockModel(buf, title = 'Document') {
   // Section properties → page size / margins (twips → px). Falls back to the model
   // default (A4) when absent, so a Letter document with 1" margins reproduces its
   // real content width — which drives wrapping and therefore pagination.
-  const page = { ...DEFAULT_PAGE, ...readPageSetup(body) };
+  // Sections carry the page setup. `sections[0]` is page 1's (what the doc opens at);
+  // later sections may differ (a landscape page, wider margins, …). We open at the
+  // FIRST section's geometry and tag each section-starting block with its own setup
+  // (`pageOverride`) so the information survives into the model / export and a future
+  // per-section canvas can honour it.
+  const sections = readSections(body);
+  const page = { ...DEFAULT_PAGE, ...(sections[0] || {}) };
+
+  dbg('page size (px):', { width: page.width, height: page.height, orientation: page.orientation || (page.width > page.height ? 'landscape' : 'portrait') },
+    'usable height (px):', page.height - ((page.margins && (page.margins.top + page.margins.bottom)) || (page.margin * 2)));
+  dbg('margins (px):', page.margins || { all: page.margin });
+  const mixed = sections.some((s) => geomDiffers(s, sections[0]));
+  dbg(`sections: ${sections.length || 1}`, mixed ? '(MIXED page setups — opens at section 1; later sections tagged pageOverride)' : '(uniform page setup)');
+  if (mixed) sections.forEach((s, i) => dbg(`  section ${i + 1}:`, { width: s.width, height: s.height, margins: s.margins }));
+  dbg('doc default font size (px):', styleInfo.def.sizePx ?? `(none → ${WORD_DEFAULT_SIZE_PX})`,
+    'family:', styleInfo.def.fontFamily || '(none → editor default)');
+  dbg('doc default line-height:', styleInfo.def.lineHeight ?? (styleInfo.def.lineHeightPx != null ? `${styleInfo.def.lineHeightPx}px` : `(none → ${WORD_DEFAULT_LINE})`),
+    'spaceBefore:', styleInfo.def.spaceBefore ?? 0, 'spaceAfter:', styleInfo.def.spaceAfter ?? 0);
 
   // Modal body font size (px), used to infer headings in documents that style
   // their headings with a large/bold font instead of Word heading styles — very
   // common in real-world and exported .docx. Without this the left outline stays
   // empty because nothing is tagged h1/h2/h3.
   const bodySize = computeBodySize(body);
+  dbg('modal body size (px):', bodySize);
+  dbgParaBudget = docxDebugOn() ? 12 : 0; // log the first dozen paragraphs' metrics
+
+  // Document default run formatting, applied to table cells that carry no inline size
+  // so they match the body text (not the model's generic 16px).
+  const cellDefaults = {
+    fontSize: styleInfo.def.sizePx || WORD_DEFAULT_SIZE_PX,
+    fontFamily: styleInfo.def.fontFamily || undefined,
+    color: styleInfo.def.color || undefined,
+  };
 
   const blocks = [];
   let pendingList = null; // accumulate consecutive list paragraphs
@@ -105,12 +152,29 @@ export async function docxToBlockModel(buf, title = 'Document') {
   const stride = (page.height || DEFAULT_PAGE.height) + PAGE_GAP_PX;
   let pageIndex = 0;
   let pendingBreak = false;
+  // Section geometry tracking: we start in section 0 (the primary page). Crossing a
+  // SECTION break (not a plain page break) advances into the next section, whose setup
+  // is the next entry in `sections`. When that setup differs from page 1's, the next
+  // in-flow block is tagged with a `pageOverride` so the change is carried in the model.
+  let sectionIndex = 0;
+  let pendingSectionGeom = null;
+  const enterNextSection = () => {
+    sectionIndex += 1;
+    const geom = sections[sectionIndex];
+    pendingSectionGeom = geom && geomDiffers(geom, sections[0]) ? geom : null;
+  };
   // A floating image is positioned absolutely and is excluded from the editor's
   // flow pagination, so a forced break must NOT land on it — it would be ignored
   // and the page wouldn't break. Carry the break to the next in-flow block instead.
   const isFloating = (blk) => blk && blk.type === 'image' && blk.left != null && blk.top != null;
   const applyBreak = (blk) => {
     if (blk && pendingBreak && !isFloating(blk)) { blk.breakBefore = true; pendingBreak = false; }
+    // Attach the new section's page setup to the first block of that section so a
+    // per-section renderer/exporter can switch geometry there (harmless otherwise).
+    if (blk && pendingSectionGeom && !isFloating(blk)) {
+      blk.pageOverride = { width: pendingSectionGeom.width, height: pendingSectionGeom.height, margins: pendingSectionGeom.margins };
+      pendingSectionGeom = null;
+    }
     return blk;
   };
   const placeFloat = (blk) => {
@@ -136,7 +200,7 @@ export async function docxToBlockModel(buf, title = 'Document') {
           applyBreak(pendingList.block);
         }
         pendingList.block.items.push({ runs: runs.length ? runs : [createRun('')] });
-        if (brk === 'section') { flushList(); pageIndex += 1; pendingBreak = true; } // section break after the list item
+        if (brk === 'section') { flushList(); pageIndex += 1; pendingBreak = true; enterNextSection(); } // section break after the list item
         continue;
       }
       flushList();
@@ -154,7 +218,7 @@ export async function docxToBlockModel(buf, title = 'Document') {
       // block via `pendingBreak`. (A manual/before break already advanced pageIndex
       // above; a section break advances it here.)
       if (!hasText && !drawings.length && brk) {
-        if (brk === 'section') { pageIndex += 1; pendingBreak = true; }
+        if (brk === 'section') { pageIndex += 1; pendingBreak = true; enterNextSection(); }
         continue;
       }
       if (drawings.length) {
@@ -165,10 +229,10 @@ export async function docxToBlockModel(buf, title = 'Document') {
         applyBreak(para);
         blocks.push(para);
       }
-      if (brk === 'section') { pageIndex += 1; pendingBreak = true; } // section break trails this paragraph
+      if (brk === 'section') { pageIndex += 1; pendingBreak = true; enterNextSection(); } // section break trails this paragraph
     } else if (tag === 'tbl') {
       flushList();
-      blocks.push(applyBreak(readTable(node, files, rels)));
+      blocks.push(applyBreak(readTable(node, files, rels, cellDefaults)));
     }
   }
   flushList();
@@ -479,16 +543,23 @@ function readParaSpacing(ppr) {
   return o;
 }
 
-/** Page size + margin (px) from the body's section properties. */
-function readPageSetup(body) {
-  const sect = Array.from(body.getElementsByTagName('w:sectPr')).pop();
-  if (!sect) return {};
+/** Page size + margin (px) + orientation from ONE `<w:sectPr>` element. */
+function readSectGeom(sect) {
   const page = {};
+  if (!sect) return page;
   const pgSz = child(sect, 'pgSz');
   if (pgSz) {
     const w = attr(pgSz, 'w:w'); const h = attr(pgSz, 'w:h');
     if (w) page.width = Math.round(TWIP_TO_PX(w));
     if (h) page.height = Math.round(TWIP_TO_PX(h));
+    // Orientation: Word writes w:orient AND swaps w/h for landscape, so the raw
+    // dimensions already describe the real page box. Trust the dimensions (fall back
+    // to w:orient only if they're square/ambiguous), so a landscape page opens wide
+    // instead of portrait — otherwise its text overflows and inflates the page count.
+    const orient = attr(pgSz, 'w:orient');
+    page.orientation = page.width && page.height
+      ? (page.width > page.height ? 'landscape' : 'portrait')
+      : (orient === 'landscape' ? 'landscape' : 'portrait');
   }
   const pgMar = child(sect, 'pgMar');
   if (pgMar) {
@@ -518,6 +589,32 @@ function readPageSetup(body) {
   return page;
 }
 
+/** Every section's geometry, in document order. A Word document is a sequence of
+ *  SECTIONS, each ended by a `<w:sectPr>` — inline ones (in a paragraph's pPr) end
+ *  each earlier section, and the final body-level one ends the last section. So the
+ *  NodeList order is [section 1, section 2, …, last section], i.e. `[0]` is page 1's
+ *  setup. Returns [] when the body has no section properties at all. */
+function readSections(body) {
+  return Array.from(body.getElementsByTagName('w:sectPr')).map(readSectGeom);
+}
+
+/** Whether two section geometries describe a different page (size or margins) — used
+ *  to detect a document that mixes setups (e.g. a landscape page mid-document). */
+function geomDiffers(a, b) {
+  if (!a || !b) return !!(a || b);
+  if (a.width !== b.width || a.height !== b.height) return true;
+  const ma = a.margins || {}; const mb = b.margins || {};
+  return ma.top !== mb.top || ma.right !== mb.right || ma.bottom !== mb.bottom || ma.left !== mb.left;
+}
+
+/** Page size + margin (px) from the body's section properties — the PRIMARY (page 1 /
+ *  first section) setup, which is what the document opens at. Was the LAST section,
+ *  which opened a multi-section doc at its final section's size/margins by mistake. */
+function readPageSetup(body) {
+  const sects = readSections(body);
+  return sects[0] || {};
+}
+
 /* ------------------------------- paragraph -------------------------------- */
 
 function readParagraph(pNode, files, rels, bodySize = 16, styleInfo = { def: {}, byId: {} }) {
@@ -529,7 +626,9 @@ function readParagraph(pNode, files, rels, bodySize = 16, styleInfo = { def: {},
   const styleId = attr(child(pPr, 'pStyle'), 'w:val') || 'Normal';
   const eff = { ...styleInfo.def, ...styleChain(styleInfo, styleId), ...readParaSpacing(pPr) };
   const defaults = {
-    fontSize: eff.sizePx || undefined,
+    // Fall back to Word's real body size (11pt ≈ 15px), NOT the editor's 16px default,
+    // so an unspecified run isn't ~9% taller than in Word (which compounds into pages).
+    fontSize: eff.sizePx || WORD_DEFAULT_SIZE_PX,
     fontFamily: eff.fontFamily || undefined,
     color: eff.color || undefined,
   };
@@ -539,12 +638,25 @@ function readParagraph(pNode, files, rels, bodySize = 16, styleInfo = { def: {},
   // document outline (they're the common case — see computeBodySize).
   const tag = explicitHeadingTag(pPr) || inferHeadingTag(runs, bodySize) || 'p';
 
+  // Emit spacing + line-height EXPLICITLY (from the file, else Word's defaults) so the
+  // editor's larger "web document" defaults (line-height 1.4 / 10px after, injected by
+  // createParagraph) never leak into imported text. That leak is the main reason a
+  // 6-page Word doc paginated to ~18 pages: every line was ~40% taller and every
+  // paragraph gained a 10px bottom margin the source never had.
   const style = { align };
-  if (eff.spaceBefore != null) style.spaceBefore = eff.spaceBefore;
-  if (eff.spaceAfter != null) style.spaceAfter = eff.spaceAfter;
-  if (eff.lineHeight != null) style.lineHeight = eff.lineHeight;
-  if (eff.lineHeightPx != null) style.lineHeightPx = eff.lineHeightPx;
+  style.spaceBefore = eff.spaceBefore != null ? eff.spaceBefore : 0;
+  style.spaceAfter = eff.spaceAfter != null ? eff.spaceAfter : 0;
+  if (eff.lineHeightPx != null) style.lineHeightPx = eff.lineHeightPx;   // exact/atLeast rule
+  else style.lineHeight = eff.lineHeight != null ? eff.lineHeight : WORD_DEFAULT_LINE;
   if (eff.indentLeft) style.indentLeft = eff.indentLeft;
+
+  if (docxDebugOn() && dbgParaBudget > 0) {
+    dbgParaBudget -= 1;
+    dbg(`para[${tag}] size≈${(runs[0] && runs[0].marks && runs[0].marks.fontSize) || defaults.fontSize}px`,
+      'line-height:', style.lineHeightPx != null ? `${style.lineHeightPx}px(exact)` : style.lineHeight,
+      'spaceBefore:', style.spaceBefore, 'spaceAfter:', style.spaceAfter,
+      'chars:', runs.reduce((n, r) => n + ((r.text || '').length), 0));
+  }
   return createParagraph({ tag, style, runs: runs.length ? runs : [createRun('')] });
 }
 
@@ -708,7 +820,7 @@ function parseNumbering(text) {
 
 /* --------------------------------- tables --------------------------------- */
 
-function readTable(tbl, files, rels) {
+function readTable(tbl, files, rels, defaults = {}) {
   const rows = [];
   const rowWidths = []; // per row: [{ w, span }] from each cell's <w:tcW>
   for (const tr of childrenOf(tbl, 'tr')) {
@@ -716,7 +828,11 @@ function readTable(tbl, files, rels) {
     const widths = [];
     for (const tc of childrenOf(tr, 'tc')) {
       const runs = [];
-      for (const p of childrenOf(tc, 'p')) runs.push(...readRuns(p, files, rels));
+      // Pass the document's default run formatting so an unstyled cell renders at the
+      // doc's body size (e.g. 11pt≈15px), NOT the model's generic 16px — cell text was
+      // ~7% bigger than the body, and combined with the table's inherited line-height
+      // it made every row taller than Word's, inflating the page count.
+      for (const p of childrenOf(tc, 'p')) runs.push(...readRuns(p, files, rels, defaults));
       const cell = { runs: runs.length ? runs : [createRun('')] };
       const tcPr = child(tc, 'tcPr');
       // Horizontal cell merge (w:gridSpan) → colSpan, so a header spanning several
@@ -811,8 +927,14 @@ function drawingToBlock(drawing, files, rels, page) {
   const mime = ext === 'jpg' ? 'jpeg' : ext;
 
   const extent = drawing.getElementsByTagName('wp:extent')[0];
-  const width = extent ? Math.round((parseInt(extent.getAttribute('cx') || '0', 10)) / EMU_PER_PX) : undefined;
-  const height = extent ? Math.round((parseInt(extent.getAttribute('cy') || '0', 10)) / EMU_PER_PX) : undefined;
+  const cx = extent ? parseInt(extent.getAttribute('cx') || '0', 10) : 0;
+  const cy = extent ? parseInt(extent.getAttribute('cy') || '0', 10) : 0;
+  const width = extent ? Math.round(cx / EMU_PER_PX) : undefined;
+  const height = extent ? Math.round(cy / EMU_PER_PX) : undefined;
+  // Image size is taken verbatim from the drawing's display extent (EMU → px @96dpi),
+  // i.e. exactly the box Word draws it in — never the raw pixel dimensions of the
+  // embedded file — so a picture can't render larger than the source shows it.
+  dbg('image:', path.split('/').pop(), 'EMU', { cx, cy }, '→ px', { width, height });
   const block = createImageBlock({
     src: `data:image/${mime};base64,${base64(bytes)}`,
     width: width || undefined,

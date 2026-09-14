@@ -99,6 +99,14 @@ export function fitPosboxWidthEl(box, pageWidth) {
   return cur;
 }
 
+/** Pagination debug logging (page geometry, usable height, computed per-block
+ *  font-size / line-height, image rendered dims, final page count). Off by default;
+ *  enable with `localStorage.DOCX_DEBUG = '1'` or `globalThis.__DOCX_DEBUG = true`. */
+function docDebugOn() {
+  try { if (globalThis.__DOCX_DEBUG) return true; } catch { /* no global */ }
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem('DOCX_DEBUG') === '1'; } catch { return false; }
+}
+
 export function createDocumentEditor({ container, onChange, onSelection, onPaginate, onRequestHfSettings }) {
   container.classList.add('doc-editor');
   const scroll = el('div', { class: 'doc-editor-scroll' });
@@ -449,6 +457,38 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     pageCount = count;
     renderHfBoxes(count); // draw/refresh the running head/foot on every page
     reportPagination(true);
+    if (docDebugOn()) logPaginationDebug({ blocks, PAGE_W, PAGE_H, m, usable, count });
+  }
+
+  /** One-shot diagnostic dump comparing the source's page geometry to what the editor
+   *  actually laid out — the numbers that explain a page-count mismatch. */
+  function logPaginationDebug({ blocks, PAGE_W, PAGE_H, m, usable, count }) {
+    try {
+      console.log('[doc-paginate] page (px):', { width: PAGE_W, height: PAGE_H },
+        'margins:', m, 'usable height:', usable, '→ pages:', count);
+      const overrides = blocks.filter((b) => b.dataset && b.dataset.pageOverride);
+      if (overrides.length) {
+        console.log(`[doc-paginate] ${overrides.length} section page-override(s) present (opened at section 1's size; per-section rendering is a follow-up):`,
+          overrides.map((b) => { try { return JSON.parse(b.dataset.pageOverride); } catch { return b.dataset.pageOverride; } }));
+      }
+      let logged = 0;
+      for (const b of blocks) {
+        if (b.tagName === 'FIGURE' && b.classList.contains('doc-image')) {
+          const img = b.querySelector('img');
+          const r = img && img.getBoundingClientRect();
+          console.log('[doc-paginate] image rendered (px):', img ? { width: Math.round(r.width / (zoom || 1)), height: Math.round(r.height / (zoom || 1)) } : '(none)');
+          continue;
+        }
+        if (logged >= 12 || !/^(P|H1|H2|H3|LI)$/.test(b.tagName)) continue;
+        logged += 1;
+        const cs = getComputedStyle(b);
+        const span = b.querySelector('span');
+        const scs = span && getComputedStyle(span);
+        console.log(`[doc-paginate] ${b.tagName} font-size:`, scs ? scs.fontSize : cs.fontSize,
+          'line-height:', cs.lineHeight, 'marginTop/Bottom:', cs.marginTop, cs.marginBottom,
+          'height(px):', b.offsetHeight);
+      }
+    } catch { /* diagnostics must never break layout */ }
   }
 
   /**

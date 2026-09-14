@@ -659,7 +659,10 @@
 
 /* Image block: shrink-wraps the picture so the selection handles sit on its
    corners. Click to select (resize handles), drag a corner to resize. */
-.doc-image { position: relative; margin: 12px 0; width: fit-content; max-width: 100%; }
+/* Vertical margin is kept small: Word gives an inline image only its paragraph's
+   line spacing, so a large block margin here reserved more space around imported
+   pictures than the source, nudging content onto the next page. */
+.doc-image { position: relative; margin: 4px 0; width: fit-content; max-width: 100%; }
 .doc-image img { display: block; max-width: 100%; border-radius: 4px; user-select: none; }
 .doc-image.is-selected { outline: 2px solid var(--ws-primary); outline-offset: 1px; }
 /* Selected image reads as draggable (drag the body to reposition it). */
@@ -706,7 +709,13 @@
 .doc-table:not(:has(> colgroup)) { table-layout: auto; }
 .doc-table td {
   border: 1px solid #9aa1b7;
-  padding: 8px 10px;
+  /* Word's default cell margin is 0 top/bottom, ~0.08" sides. A large top/bottom
+     padding (was 8px) made every row taller than Word's, and since a table's cells
+     inherit the block's 1.5 line-height, a dense table inflated by ~2× — enough to
+     spill tables across pages and blow up the page count. Tight vertical padding +
+     a body-like line-height keep imported tables the height Word shows. */
+  padding: 2px 8px;
+  line-height: 1.25;
   vertical-align: top;
   /* Wrap at word boundaries first; only break a word when it genuinely can't fit
      on its own line (e.g. the long-token stress test). `break-word` — unlike
