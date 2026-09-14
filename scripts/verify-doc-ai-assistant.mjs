@@ -45,25 +45,26 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><link rel="stylesheet" href
     document.querySelector('.app-drop__actions .ws-btn--accent').click();
     await new Promise(r => setTimeout(r, 400));
     const btn = document.querySelector('.doc-ai-btn');
-    const before = { hasBtn: !!btn, btnText: btn && btn.textContent, panelBefore: !!document.querySelector('.doc-ai-panel'), openBefore: document.querySelector('.app-ws--document').classList.contains('is-ai-open') };
+    const before = { hasBtn: !!btn, btnText: btn && btn.textContent, panelBefore: !!document.querySelector('.doc-ai-dock'), openBefore: document.querySelector('.app-ws--document').classList.contains('is-ai-open') };
     btn.click();
-    await new Promise(r => setTimeout(r, 100));
-    const panel = document.querySelector('.doc-ai-panel');
+    await new Promise(r => setTimeout(r, 120));
+    const bar = document.querySelector('.doc-ai-bar');
     const openAfter = document.querySelector('.app-ws--document').classList.contains('is-ai-open');
-    const rect = panel ? panel.getBoundingClientRect() : { width: 0, height: 0 };
-    const panelHeight = Math.round(rect.height);
-    // Bottom dock: it spans the editor column width and sits at the bottom of it.
+    const rect = bar ? bar.getBoundingClientRect() : { width: 0, height: 0, bottom: 0 };
+    const barHeight = Math.round(rect.height);
     const main = document.querySelector('.doc-main');
-    const mainRect = main ? main.getBoundingClientRect() : { bottom: 0, width: 0 };
-    const atBottom = panel ? Math.abs(rect.bottom - mainRect.bottom) < 4 : false;
-    const spansWidth = panel ? rect.width > mainRect.width * 0.8 : false;
-    // send a message via the quick chip
+    const mainRect = main ? main.getBoundingClientRect() : { bottom: 0, width: 1 };
+    // Compact floating pill near the bottom, NOT spanning the full editor width.
+    const nearBottom = bar ? Math.abs(rect.bottom - mainRect.bottom) < 40 : false;
+    const compact = bar ? (rect.width <= 640 && rect.width < mainRect.width * 0.92) : false;
+    // send a message via a quick chip → messages appear in the popover above the bar
     document.querySelector('.doc-ai__chip').click();
     await new Promise(r => setTimeout(r, 400));
     const msgCount = document.querySelectorAll('.doc-ai__msg').length;
-    return { ...before, openAfter, panelHeight, atBottom, spansWidth, msgCount };
+    const popVisible = !!document.querySelector('.doc-ai-pop.is-visible');
+    return { ...before, openAfter, barHeight, nearBottom, compact, msgCount, popVisible };
   };
-  window.closePanel = () => { document.querySelector('.doc-ai__close').click(); return !document.querySelector('.app-ws--document').classList.contains('is-ai-open'); };
+  window.closePanel = () => { document.querySelector('.doc-ai-bar__close').click(); return !document.querySelector('.app-ws--document').classList.contains('is-ai-open'); };
 </script></body>`;
 
 const server = http.createServer((req, res) => {
@@ -96,12 +97,13 @@ try {
   const closedOk = await page.evaluate(() => window.closePanel());
   check('AI Assistant button is present', r.hasBtn, r.hasBtn);
   check('button reads "AI Assistant"', (r.btnText || '').includes('AI Assistant'), r.btnText);
-  check('panel is closed by default (lazy, not built before first click)', r.panelBefore === false && r.openBefore === false, `${r.panelBefore}/${r.openBefore}`);
-  check('clicking opens the docked panel', r.openAfter === true, r.openAfter);
-  check('panel docks at the BOTTOM (not the right side)', r.atBottom === true, r.atBottom);
-  check('panel spans the editor width', r.spansWidth === true, r.spansWidth);
-  check('open panel has real height (~320px)', r.panelHeight >= 280, r.panelHeight);
-  check('a quick-action chip produces a chat exchange', r.msgCount >= 3, r.msgCount);
+  check('closed by default (lazy, not built before first click)', r.panelBefore === false && r.openBefore === false, `${r.panelBefore}/${r.openBefore}`);
+  check('clicking opens the chat bar', r.openAfter === true, r.openAfter);
+  check('bar sits near the bottom of the editor', r.nearBottom === true, r.nearBottom);
+  check('bar is a compact pill (not full width)', r.compact === true, r.compact);
+  check('bar is small (~48px tall)', r.barHeight >= 40 && r.barHeight <= 60, r.barHeight);
+  check('a quick-action chip produces a chat exchange', r.msgCount >= 2, r.msgCount);
+  check('conversation appears in the popover above the bar', r.popVisible === true, r.popVisible);
   check('close button closes the panel', closedOk === true, closedOk);
 } catch (e) {
   console.log('SKIPPED:', String(e.message || e).split('\n')[0]);

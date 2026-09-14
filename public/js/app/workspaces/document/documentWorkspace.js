@@ -246,6 +246,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
       const bubble = el('div', { class: `doc-ai__msg doc-ai__msg--${who}` }, text);
       msgs.appendChild(bubble);
       msgs.scrollTop = msgs.scrollHeight;
+      ui.aiUpdatePop?.(); // reveal the popover once there's a conversation
       return bubble;
     };
 
@@ -298,28 +299,29 @@ export function createDocumentWorkspace({ bus, store, services }) {
       setTimeout(() => { thinking.textContent = respond(prompt); ui.aiMsgs.scrollTop = ui.aiMsgs.scrollHeight; }, 250);
     }
 
-    // Fixed-height inner keeps content from reflowing while the panel animates open.
-    const inner = el('div', { class: 'doc-ai__inner' }, [
-      el('div', { class: 'doc-ai__head' }, [
-        el('span', { class: 'doc-ai__title' }, [
-          el('span', { class: 'doc-ai__title-ico', html: renderIcon('sparkle') }),
-          el('span', {}, 'AI Assistant'),
-        ]),
-        el('button', {
-          class: 'doc-ai__close', type: 'button', 'aria-label': 'Close AI Assistant',
-          onClick: () => closeAiPanel(),
-        }, '✕'),
-      ]),
-      msgs,
-      el('div', { class: 'doc-ai__chips' }, chips),
-      el('div', { class: 'doc-ai__composer' }, [input, sendBtn]),
+    // Compact popover (messages + chips) that appears ABOVE the bar, only while the
+    // input is focused or there's a conversation — so at rest it's just the small bar.
+    const pop = el('div', { class: 'doc-ai-pop' }, [msgs, el('div', { class: 'doc-ai__chips' }, chips)]);
+    ui.aiPop = pop;
+    const updatePop = () => pop.classList.toggle('is-visible', document.activeElement === input || msgs.childElementCount > 0);
+    input.addEventListener('focus', updatePop);
+    input.addEventListener('blur', () => setTimeout(updatePop, 150));
+    ui.aiUpdatePop = updatePop;
+
+    // The small floating chat bar (Gemini-style pill): icon · input · send · close.
+    const bar = el('div', { class: 'doc-ai-bar' }, [
+      el('span', { class: 'doc-ai-bar__ico', html: renderIcon('sparkle') }),
+      input,
+      sendBtn,
+      el('button', {
+        class: 'doc-ai-bar__close', type: 'button', 'aria-label': 'Close AI Assistant',
+        'data-tip': 'Close', onClick: () => closeAiPanel(),
+      }, '✕'),
     ]);
-    const panel = el('aside', { class: 'doc-ai-panel', 'aria-label': 'AI Assistant' }, [inner]);
-    ui.aiPanel = panel;
-    // Dock at the BOTTOM of the editor column so the chat slides up from below
-    // (not a right-hand sidebar), pushing the page host up rather than overlaying it.
-    (ui.docMain || ui.docBody || root).appendChild(panel);
-    addMsg('ai', 'Hi! I’m your document assistant. Ask me about your text, or pick a quick action below.');
+    const dock = el('div', { class: 'doc-ai-dock', 'aria-label': 'AI Assistant' }, [pop, bar]);
+    ui.aiPanel = dock;
+    // Float a compact bar at the bottom-centre of the editor (not a full panel).
+    (ui.docMain || ui.docBody || root).appendChild(dock);
   }
 
   function mkMenu(label, itemsFn) {

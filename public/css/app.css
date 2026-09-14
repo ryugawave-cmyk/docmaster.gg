@@ -887,55 +887,64 @@
 @keyframes doc-ai-flow { to { background-position: 260% 0, 260% 0; } }
 @media (prefers-reduced-motion: reduce) { .doc-ai-btn, .doc-ai-btn__txt { animation: none; } }
 
-/* Docked panel: a BOTTOM dock in .doc-main that slides up from below (default closed),
-   pushing the page host up rather than overlaying it. */
-.doc-ai-panel {
-  flex: 0 0 0; height: 0; overflow: hidden;
-  border-top: 1px solid var(--ws-border); background: var(--ws-surface, #fff);
-  box-shadow: 0 -6px 20px rgba(19, 22, 45, 0.10);
-  transition: height .22s ease; will-change: height;
+/* Compact floating chat bar (Gemini-style pill) at the bottom-centre of the editor.
+   Default closed; toggled by the AI Assistant button. A small popover with the
+   conversation + quick actions appears ABOVE the bar only while focused or once a
+   conversation exists — so at rest it's just the little bar, not a full panel. */
+.doc-ai-dock {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 9;
+  width: min(620px, calc(100% - 40px));
+  display: none; flex-direction: column; gap: 8px; pointer-events: none;
 }
-.app-ws--document.is-ai-open .doc-ai-panel { height: 320px; flex-basis: 320px; }
-.doc-ai__inner { width: 100%; height: 320px; display: flex; flex-direction: column; min-height: 0; }
-/* Keep the floating zoom control visible above the bottom dock while it's open. */
-.doc-zoom { transition: bottom .22s ease; }
-.app-ws--document.is-ai-open .doc-zoom { bottom: 336px; }
-.doc-ai__head {
-  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px; border-bottom: 1px solid var(--ws-border);
+.app-ws--document.is-ai-open .doc-ai-dock { display: flex; }
+.doc-ai-dock > * { pointer-events: auto; }
+.doc-ai-bar {
+  display: flex; align-items: center; gap: 8px;
+  height: 48px; padding: 0 6px 0 14px;
+  border: 1px solid var(--ws-border); border-radius: 26px;
+  background: var(--ws-surface, #fff); box-shadow: 0 8px 26px rgba(19, 22, 45, 0.18);
 }
-.doc-ai__title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; color: var(--ws-text); }
-.doc-ai__title-ico { display: inline-flex; color: #a855f7; }
-.doc-ai__title-ico .ws-icon { width: 18px; height: 18px; }
-.doc-ai__close {
-  width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent;
-  color: var(--ws-text-soft, #64748b); cursor: pointer; font-size: 14px;
+.doc-ai-bar:focus-within { border-color: color-mix(in srgb, #a855f7 55%, transparent); box-shadow: 0 8px 26px rgba(168, 85, 247, 0.22); }
+.doc-ai-bar__ico { display: inline-flex; color: #a855f7; flex: 0 0 auto; }
+.doc-ai-bar__ico .ws-icon { width: 18px; height: 18px; }
+.doc-ai-bar__close {
+  flex: 0 0 auto; width: 30px; height: 30px; border: 0; border-radius: 50%; background: transparent;
+  color: var(--ws-text-soft, #64748b); cursor: pointer; font-size: 13px;
 }
-.doc-ai__close:hover { background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); }
-.doc-ai__msgs { flex: 1 1 auto; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-.doc-ai__msg { max-width: min(88%, 640px); padding: 9px 12px; border-radius: 14px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.doc-ai-bar__close:hover { background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); }
+/* The input sits transparent inside the pill (no inner border/box). */
+.doc-ai__input {
+  flex: 1 1 auto; resize: none; min-height: 24px; max-height: 110px; padding: 6px 2px;
+  border: 0; background: transparent; color: var(--ws-text); font: inherit; font-size: 14px; line-height: 1.4;
+}
+.doc-ai__input:focus { outline: none; }
+.doc-ai__send {
+  flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; color: #fff;
+  background: linear-gradient(100deg, #6366f1, #a855f7, #ec4899);
+}
+.doc-ai__send .ws-icon { width: 17px; height: 17px; }
+.doc-ai__send:hover { filter: brightness(1.08); }
+
+/* Popover above the bar: conversation + quick chips. Compact, scrolls when tall. */
+.doc-ai-pop {
+  display: none; flex-direction: column; max-height: min(46vh, 340px); overflow: hidden;
+  border: 1px solid var(--ws-border); border-radius: 16px; background: var(--ws-surface, #fff);
+  box-shadow: 0 10px 30px rgba(19, 22, 45, 0.18);
+}
+.doc-ai-pop.is-visible { display: flex; }
+.doc-ai__msgs { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.doc-ai__msgs:empty { display: none; }
+.doc-ai__msg { max-width: min(90%, 560px); padding: 8px 11px; border-radius: 13px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .doc-ai__msg--ai { align-self: flex-start; background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); border-bottom-left-radius: 4px; }
 .doc-ai__msg--user { align-self: flex-end; background: linear-gradient(100deg, #6366f1, #a855f7); color: #fff; border-bottom-right-radius: 4px; }
-.doc-ai__chips { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--ws-border); }
+.doc-ai__chips { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; }
+.doc-ai__msgs:not(:empty) + .doc-ai__chips { border-top: 1px solid var(--ws-border); }
 .doc-ai__chip {
   padding: 5px 10px; border: 1px solid var(--ws-border); border-radius: 999px;
   background: var(--ws-surface, #fff); color: var(--ws-text); font-size: 12px; cursor: pointer; white-space: nowrap;
 }
 .doc-ai__chip:hover { border-color: color-mix(in srgb, #a855f7 45%, transparent); color: var(--ws-primary-dark, #4f46e5); }
-.doc-ai__composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px 14px; }
-.doc-ai__input {
-  flex: 1 1 auto; resize: none; min-height: 38px; max-height: 120px; padding: 9px 11px;
-  border: 1px solid var(--ws-border); border-radius: 12px; background: var(--ws-bg, #fff);
-  color: var(--ws-text); font: inherit; font-size: 13px; line-height: 1.4;
-}
-.doc-ai__input:focus { outline: none; border-color: color-mix(in srgb, #a855f7 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, #a855f7 18%, transparent); }
-.doc-ai__send {
-  flex: 0 0 auto; width: 38px; height: 38px; border: 0; border-radius: 12px; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center; color: #fff;
-  background: linear-gradient(100deg, #6366f1, #a855f7, #ec4899);
-}
-.doc-ai__send .ws-icon { width: 18px; height: 18px; }
-.doc-ai__send:hover { filter: brightness(1.08); }
 
 /* Two-tier Download menu: primary Quick Export + Advanced Export. */
 .doc-export-menu--rich { min-width: 264px; padding: 7px; }
