@@ -15,7 +15,7 @@ import { el } from '../../../workspace/utils/dom.js';
 import { renderIcon } from '../../../workspace/icons.js';
 import { selection, emptySelection, SelectionKind } from '../../core/selection.js';
 import { createDocumentEditor } from '../../editor/documentEditor.js';
-import { createBlankDocument, createDocument, createParagraph, createRun } from '../../model/documentModel.js';
+import { createBlankDocument, createDocument, createParagraph, createRun, documentToText } from '../../model/documentModel.js';
 import { blockModelToDocx, blockModelToPdf, htmlBlob } from '../../services/convert/blockExport.js';
 import { docxToBlockModel } from '../../services/convert/docxImport.js';
 import { createDocExportPanel } from './docExportPanel.js';
@@ -98,7 +98,8 @@ export function createDocumentWorkspace({ bus, store, services }) {
     // Body row: [outline | main(ruler + page)] so the ruler sits above the page
     // only, with the outline panel spanning the full height to its left.
     const main = el('div', { class: 'doc-main' }, [rulerEl, hostEl, zoomCtl]);
-    root.replaceChildren(menubarEl, toolbarEl, el('div', { class: 'doc-body' }, [outlineEl, main]));
+    ui.docBody = el('div', { class: 'doc-body' }, [outlineEl, main]);
+    root.replaceChildren(menubarEl, toolbarEl, ui.docBody);
     // Restore the remembered theme preference for the document editor.
     try { if (localStorage.getItem('alvion:doc-theme') === 'dark') setDark(true); } catch (e) { /* noop */ }
     editor = createDocumentEditor({
@@ -202,8 +203,120 @@ export function createDocumentWorkspace({ bus, store, services }) {
         ]),
       ]),
       // Download lives at the top-right of the menu bar (pushed there via CSS).
-      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkExportMenu()]),
+      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkAiAssistant(), mkExportMenu()]),
     );
+  }
+
+  // AI Assistant: a gradient-glow button at the top-right (next to Export) that
+  // toggles a docked right-side assistant panel (see buildAiPanel).
+  function mkAiAssistant() {
+    ui.aiBtn = el('button', {
+      class: 'doc-btn doc-ai-btn', type: 'button',
+      'data-tip': 'AI Assistant', 'aria-label': 'AI Assistant', 'aria-pressed': 'false',
+      onClick: () => toggleAiPanel(),
+    }, [
+      el('span', { class: 'doc-ai-btn__ico', html: renderIcon('sparkle') }),
+      el('span', { class: 'doc-ai-btn__txt' }, 'AI Assistant'),
+    ]);
+    return ui.aiBtn;
+  }
+
+  /* ------------------------------ AI Assistant ------------------------------ */
+  // A docked right-side panel: a chat surface plus quick actions that operate on the
+  // current document. Built lazily on first open and reused thereafter.
+  function toggleAiPanel() {
+    if (!ui.aiPanel) buildAiPanel();
+    const open = !root.classList.contains('is-ai-open');
+    root.classList.toggle('is-ai-open', open);
+    ui.aiBtn?.setAttribute('aria-pressed', open ? 'true' : 'false');
+    ui.aiBtn?.classList.toggle('is-on', open);
+    if (open) requestAnimationFrame(() => ui.aiInput?.focus());
+  }
+  function closeAiPanel() {
+    root.classList.remove('is-ai-open');
+    ui.aiBtn?.setAttribute('aria-pressed', 'false');
+    ui.aiBtn?.classList.remove('is-on');
+  }
+
+  function buildAiPanel() {
+    const msgs = el('div', { class: 'doc-ai__msgs', role: 'log', 'aria-live': 'polite' });
+    ui.aiMsgs = msgs;
+    const addMsg = (who, text) => {
+      const bubble = el('div', { class: `doc-ai__msg doc-ai__msg--${who}` }, text);
+      msgs.appendChild(bubble);
+      msgs.scrollTop = msgs.scrollHeight;
+      return bubble;
+    };
+
+    // Quick actions prefill the prompt so a single click sends a common request.
+    const chips = ['Summarize the document', 'Improve the writing', 'Fix spelling & grammar', 'Make it shorter', 'Continue writing']
+      .map((label) => el('button', {
+        class: 'doc-ai__chip', type: 'button',
+        onClick: () => { ui.aiInput.value = label; ui.aiInput.focus(); submit(); },
+      }, label));
+
+    const input = el('textarea', {
+      class: 'doc-ai__input', rows: '1', placeholder: 'Ask the AI to help with your document…',
+      'aria-label': 'Message the AI Assistant',
+      onKeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } },
+      onInput: (e) => { e.target.style.height = 'auto'; e.target.style.height = `${Math.min(120, e.target.scrollHeight)}px`; },
+    });
+    ui.aiInput = input;
+    const sendBtn = el('button', {
+      class: 'doc-ai__send', type: 'button', 'data-tip': 'Send', 'aria-label': 'Send',
+      onClick: () => submit(),
+    }, el('span', { html: renderIcon('sparkle') }));
+
+    function docText() {
+      try { return documentToText(editor.getModel()).replace(/\n{2,}/g, '\n').trim(); } catch { return ''; }
+    }
+    // Local, no-cloud responses for the deterministic asks (the app is client-first,
+    // with no API keys); anything else gets a clear, honest reply instead of a fake
+    // answer. Emits `doc:ai-request` on the bus so a model can be wired in later.
+    function respond(prompt) {
+      const text = docText();
+      const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
+      const chars = text.length;
+      const p = prompt.toLowerCase();
+      if (!text) return 'Your document is empty — add some text and I can help summarise or refine it.';
+      if (/\b(word|character|char|count|how many|length|reading time)\b/.test(p)) {
+        const mins = Math.max(1, Math.round(words / 200));
+        return `Your document has ${words.toLocaleString()} words and ${chars.toLocaleString()} characters — about a ${mins}-minute read.`;
+      }
+      return `AI Assistant isn't connected to a language model yet, so I can't ${prompt.replace(/[.!?]+$/, '')} for you here. I can already report word/character count and reading time. (This panel emits a "doc:ai-request" event, ready to wire to a model.)`;
+    }
+
+    function submit() {
+      const prompt = (input.value || '').trim();
+      if (!prompt) return;
+      addMsg('user', prompt);
+      input.value = ''; input.style.height = 'auto';
+      try { bus?.emit?.('doc:ai-request', { prompt, text: docText() }); } catch { /* optional bus */ }
+      const thinking = addMsg('ai', '…');
+      // Small delay so the exchange reads like a conversation.
+      setTimeout(() => { thinking.textContent = respond(prompt); ui.aiMsgs.scrollTop = ui.aiMsgs.scrollHeight; }, 250);
+    }
+
+    // Fixed-width inner keeps content from reflowing while the panel animates open.
+    const inner = el('div', { class: 'doc-ai__inner' }, [
+      el('div', { class: 'doc-ai__head' }, [
+        el('span', { class: 'doc-ai__title' }, [
+          el('span', { class: 'doc-ai__title-ico', html: renderIcon('sparkle') }),
+          el('span', {}, 'AI Assistant'),
+        ]),
+        el('button', {
+          class: 'doc-ai__close', type: 'button', 'aria-label': 'Close AI Assistant',
+          onClick: () => closeAiPanel(),
+        }, '✕'),
+      ]),
+      msgs,
+      el('div', { class: 'doc-ai__chips' }, chips),
+      el('div', { class: 'doc-ai__composer' }, [input, sendBtn]),
+    ]);
+    const panel = el('aside', { class: 'doc-ai-panel', 'aria-label': 'AI Assistant' }, [inner]);
+    ui.aiPanel = panel;
+    (ui.docBody || root).appendChild(panel);
+    addMsg('ai', 'Hi! I’m your document assistant. Ask me about your text, or pick a quick action below.');
   }
 
   function mkMenu(label, itemsFn) {
