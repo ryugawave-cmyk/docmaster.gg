@@ -887,14 +887,19 @@
 @keyframes doc-ai-flow { to { background-position: 260% 0, 260% 0; } }
 @media (prefers-reduced-motion: reduce) { .doc-ai-btn, .doc-ai-btn__txt { animation: none; } }
 
-/* Docked panel: a flex column in .doc-body that slides open from the right. */
+/* Docked panel: a BOTTOM dock in .doc-main that slides up from below (default closed),
+   pushing the page host up rather than overlaying it. */
 .doc-ai-panel {
-  flex: 0 0 0; width: 0; overflow: hidden;
-  border-left: 1px solid var(--ws-border); background: var(--ws-surface, #fff);
-  transition: width .22s ease; will-change: width;
+  flex: 0 0 0; height: 0; overflow: hidden;
+  border-top: 1px solid var(--ws-border); background: var(--ws-surface, #fff);
+  box-shadow: 0 -6px 20px rgba(19, 22, 45, 0.10);
+  transition: height .22s ease; will-change: height;
 }
-.app-ws--document.is-ai-open .doc-ai-panel { width: 340px; flex-basis: 340px; }
-.doc-ai__inner { width: 340px; height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.app-ws--document.is-ai-open .doc-ai-panel { height: 320px; flex-basis: 320px; }
+.doc-ai__inner { width: 100%; height: 320px; display: flex; flex-direction: column; min-height: 0; }
+/* Keep the floating zoom control visible above the bottom dock while it's open. */
+.doc-zoom { transition: bottom .22s ease; }
+.app-ws--document.is-ai-open .doc-zoom { bottom: 336px; }
 .doc-ai__head {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid var(--ws-border);
@@ -908,7 +913,7 @@
 }
 .doc-ai__close:hover { background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); }
 .doc-ai__msgs { flex: 1 1 auto; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-.doc-ai__msg { max-width: 88%; padding: 9px 12px; border-radius: 14px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.doc-ai__msg { max-width: min(88%, 640px); padding: 9px 12px; border-radius: 14px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .doc-ai__msg--ai { align-self: flex-start; background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); border-bottom-left-radius: 4px; }
 .doc-ai__msg--user { align-self: flex-end; background: linear-gradient(100deg, #6366f1, #a855f7); color: #fff; border-bottom-right-radius: 4px; }
 .doc-ai__chips { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--ws-border); }

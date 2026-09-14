@@ -50,12 +50,18 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><link rel="stylesheet" href
     await new Promise(r => setTimeout(r, 100));
     const panel = document.querySelector('.doc-ai-panel');
     const openAfter = document.querySelector('.app-ws--document').classList.contains('is-ai-open');
-    const panelWidth = panel ? Math.round(panel.getBoundingClientRect().width) : 0;
+    const rect = panel ? panel.getBoundingClientRect() : { width: 0, height: 0 };
+    const panelHeight = Math.round(rect.height);
+    // Bottom dock: it spans the editor column width and sits at the bottom of it.
+    const main = document.querySelector('.doc-main');
+    const mainRect = main ? main.getBoundingClientRect() : { bottom: 0, width: 0 };
+    const atBottom = panel ? Math.abs(rect.bottom - mainRect.bottom) < 4 : false;
+    const spansWidth = panel ? rect.width > mainRect.width * 0.8 : false;
     // send a message via the quick chip
     document.querySelector('.doc-ai__chip').click();
     await new Promise(r => setTimeout(r, 400));
     const msgCount = document.querySelectorAll('.doc-ai__msg').length;
-    return { ...before, openAfter, panelWidth, msgCount };
+    return { ...before, openAfter, panelHeight, atBottom, spansWidth, msgCount };
   };
   window.closePanel = () => { document.querySelector('.doc-ai__close').click(); return !document.querySelector('.app-ws--document').classList.contains('is-ai-open'); };
 </script></body>`;
@@ -90,9 +96,11 @@ try {
   const closedOk = await page.evaluate(() => window.closePanel());
   check('AI Assistant button is present', r.hasBtn, r.hasBtn);
   check('button reads "AI Assistant"', (r.btnText || '').includes('AI Assistant'), r.btnText);
-  check('panel is lazy (not built before first click)', r.panelBefore === false, r.panelBefore);
+  check('panel is closed by default (lazy, not built before first click)', r.panelBefore === false && r.openBefore === false, `${r.panelBefore}/${r.openBefore}`);
   check('clicking opens the docked panel', r.openAfter === true, r.openAfter);
-  check('open panel has real width (~340px)', r.panelWidth >= 300, r.panelWidth);
+  check('panel docks at the BOTTOM (not the right side)', r.atBottom === true, r.atBottom);
+  check('panel spans the editor width', r.spansWidth === true, r.spansWidth);
+  check('open panel has real height (~320px)', r.panelHeight >= 280, r.panelHeight);
   check('a quick-action chip produces a chat exchange', r.msgCount >= 3, r.msgCount);
   check('close button closes the panel', closedOk === true, closedOk);
 } catch (e) {

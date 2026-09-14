@@ -98,6 +98,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
     // Body row: [outline | main(ruler + page)] so the ruler sits above the page
     // only, with the outline panel spanning the full height to its left.
     const main = el('div', { class: 'doc-main' }, [rulerEl, hostEl, zoomCtl]);
+    ui.docMain = main; // AI Assistant panel docks at the bottom of this column
     ui.docBody = el('div', { class: 'doc-body' }, [outlineEl, main]);
     root.replaceChildren(menubarEl, toolbarEl, ui.docBody);
     // Restore the remembered theme preference for the document editor.
@@ -297,7 +298,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
       setTimeout(() => { thinking.textContent = respond(prompt); ui.aiMsgs.scrollTop = ui.aiMsgs.scrollHeight; }, 250);
     }
 
-    // Fixed-width inner keeps content from reflowing while the panel animates open.
+    // Fixed-height inner keeps content from reflowing while the panel animates open.
     const inner = el('div', { class: 'doc-ai__inner' }, [
       el('div', { class: 'doc-ai__head' }, [
         el('span', { class: 'doc-ai__title' }, [
@@ -315,7 +316,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
     ]);
     const panel = el('aside', { class: 'doc-ai-panel', 'aria-label': 'AI Assistant' }, [inner]);
     ui.aiPanel = panel;
-    (ui.docBody || root).appendChild(panel);
+    // Dock at the BOTTOM of the editor column so the chat slides up from below
+    // (not a right-hand sidebar), pushing the page host up rather than overlaying it.
+    (ui.docMain || ui.docBody || root).appendChild(panel);
     addMsg('ai', 'Hi! I’m your document assistant. Ask me about your text, or pick a quick action below.');
   }
 
