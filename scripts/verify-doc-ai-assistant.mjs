@@ -41,30 +41,31 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><link rel="stylesheet" href
   window.run = async () => {
     const ws = createDocumentWorkspace({ bus, store, services });
     ws.mount(document.getElementById('app'));
-    // Open a blank document (renders the menubar with the AI button).
+    // Open a blank document — the chat bar is a permanent fixture (no top button).
     document.querySelector('.app-drop__actions .ws-btn--accent').click();
     await new Promise(r => setTimeout(r, 400));
-    const btn = document.querySelector('.doc-ai-btn');
-    const before = { hasBtn: !!btn, btnText: btn && btn.textContent, panelBefore: !!document.querySelector('.doc-ai-dock'), openBefore: document.querySelector('.app-ws--document').classList.contains('is-ai-open') };
-    btn.click();
-    await new Promise(r => setTimeout(r, 120));
+    const noTopBtn = !document.querySelector('.doc-ai-btn'); // top button removed
     const bar = document.querySelector('.doc-ai-bar');
-    const openAfter = document.querySelector('.app-ws--document').classList.contains('is-ai-open');
+    const plus = document.querySelector('.doc-ai-bar__plus');
+    const popHiddenAtRest = !document.querySelector('.doc-ai-pop.is-visible');
     const rect = bar ? bar.getBoundingClientRect() : { width: 0, height: 0, bottom: 0 };
     const barHeight = Math.round(rect.height);
     const main = document.querySelector('.doc-main');
     const mainRect = main ? main.getBoundingClientRect() : { bottom: 0, width: 1 };
-    // Compact floating pill near the bottom, NOT spanning the full editor width.
     const nearBottom = bar ? Math.abs(rect.bottom - mainRect.bottom) < 40 : false;
     const compact = bar ? (rect.width <= 640 && rect.width < mainRect.width * 0.92) : false;
-    // send a message via a quick chip → messages appear in the popover above the bar
+    // The `+` button reveals the actions popover.
+    plus.click();
+    await new Promise(r => setTimeout(r, 60));
+    const popAfterPlus = !!document.querySelector('.doc-ai-pop.is-visible');
+    // A quick chip produces a chat exchange.
     document.querySelector('.doc-ai__chip').click();
     await new Promise(r => setTimeout(r, 400));
     const msgCount = document.querySelectorAll('.doc-ai__msg').length;
-    const popVisible = !!document.querySelector('.doc-ai-pop.is-visible');
-    return { ...before, openAfter, barHeight, nearBottom, compact, msgCount, popVisible };
+    return { noTopBtn, hasBar: !!bar, hasPlus: !!plus, popHiddenAtRest, barHeight, nearBottom, compact, popAfterPlus, msgCount };
   };
-  window.closePanel = () => { document.querySelector('.doc-ai-bar__close').click(); return !document.querySelector('.app-ws--document').classList.contains('is-ai-open'); };
+  // The ✕ collapses the popover back to just the bar (bar itself stays visible).
+  window.collapse = () => { document.querySelector('.doc-ai__chip'); document.querySelector('.doc-ai-bar__close').click(); return { popHidden: !document.querySelector('.doc-ai-pop.is-visible'), barStillThere: !!document.querySelector('.doc-ai-bar') }; };
 </script></body>`;
 
 const server = http.createServer((req, res) => {
@@ -94,17 +95,17 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE.ERR', m.text()); });
   await page.goto(`http://127.0.0.1:${port}/__ai.html`, { waitUntil: 'networkidle0' });
   const r = await page.evaluate(() => window.run());
-  const closedOk = await page.evaluate(() => window.closePanel());
-  check('AI Assistant button is present', r.hasBtn, r.hasBtn);
-  check('button reads "AI Assistant"', (r.btnText || '').includes('AI Assistant'), r.btnText);
-  check('closed by default (lazy, not built before first click)', r.panelBefore === false && r.openBefore === false, `${r.panelBefore}/${r.openBefore}`);
-  check('clicking opens the chat bar', r.openAfter === true, r.openAfter);
+  const collapsed = await page.evaluate(() => window.collapse());
+  check('top menubar AI button is removed', r.noTopBtn === true, r.noTopBtn);
+  check('chat bar is always present (no toggle needed)', r.hasBar === true, r.hasBar);
+  check('bar has a + button', r.hasPlus === true, r.hasPlus);
+  check('popover is hidden at rest (just the bar)', r.popHiddenAtRest === true, r.popHiddenAtRest);
   check('bar sits near the bottom of the editor', r.nearBottom === true, r.nearBottom);
   check('bar is a compact pill (not full width)', r.compact === true, r.compact);
   check('bar is small (~48px tall)', r.barHeight >= 40 && r.barHeight <= 60, r.barHeight);
+  check('the + button opens the actions popover', r.popAfterPlus === true, r.popAfterPlus);
   check('a quick-action chip produces a chat exchange', r.msgCount >= 2, r.msgCount);
-  check('conversation appears in the popover above the bar', r.popVisible === true, r.popVisible);
-  check('close button closes the panel', closedOk === true, closedOk);
+  check('✕ collapses the popover but keeps the bar', collapsed.popHidden === true && collapsed.barStillThere === true, JSON.stringify(collapsed));
 } catch (e) {
   console.log('SKIPPED:', String(e.message || e).split('\n')[0]);
   if (browser) await browser.close();

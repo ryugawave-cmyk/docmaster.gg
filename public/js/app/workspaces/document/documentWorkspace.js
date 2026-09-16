@@ -113,6 +113,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
       // The header/footer "Options ▾ · Header & footer settings" opens our dialog.
       onRequestHfSettings: () => openHfSettings(),
     });
+    // The AI Assistant chat bar is a permanent fixture at the bottom of the editor
+    // (no top toggle button) — build it once alongside the editor scaffold.
+    if (!ui.aiPanel) buildAiPanel();
     return editor;
   }
 
@@ -204,40 +207,17 @@ export function createDocumentWorkspace({ bus, store, services }) {
         ]),
       ]),
       // Download lives at the top-right of the menu bar (pushed there via CSS).
-      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkAiAssistant(), mkExportMenu()]),
+      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkExportMenu()]),
     );
   }
 
-  // AI Assistant: a gradient-glow button at the top-right (next to Export) that
-  // toggles a docked right-side assistant panel (see buildAiPanel).
-  function mkAiAssistant() {
-    ui.aiBtn = el('button', {
-      class: 'doc-btn doc-ai-btn', type: 'button',
-      'data-tip': 'AI Assistant', 'aria-label': 'AI Assistant', 'aria-pressed': 'false',
-      onClick: () => toggleAiPanel(),
-    }, [
-      el('span', { class: 'doc-ai-btn__ico', html: renderIcon('sparkle') }),
-      el('span', { class: 'doc-ai-btn__txt' }, 'AI Assistant'),
-    ]);
-    return ui.aiBtn;
-  }
-
   /* ------------------------------ AI Assistant ------------------------------ */
-  // A docked right-side panel: a chat surface plus quick actions that operate on the
-  // current document. Built lazily on first open and reused thereafter.
-  function toggleAiPanel() {
-    if (!ui.aiPanel) buildAiPanel();
-    const open = !root.classList.contains('is-ai-open');
-    root.classList.toggle('is-ai-open', open);
-    ui.aiBtn?.setAttribute('aria-pressed', open ? 'true' : 'false');
-    ui.aiBtn?.classList.toggle('is-on', open);
-    if (open) requestAnimationFrame(() => ui.aiInput?.focus());
-  }
-  function closeAiPanel() {
-    root.classList.remove('is-ai-open');
-    ui.aiBtn?.setAttribute('aria-pressed', 'false');
-    ui.aiBtn?.classList.remove('is-on');
-  }
+  // A permanent compact chat bar floated at the bottom of the editor (no top toggle).
+  // The conversation + quick actions live in a popover that opens ABOVE the bar; the
+  // `+` button toggles it and the bar's `✕` collapses it back to just the bar.
+  const showAiPop = () => ui.aiPop?.classList.add('is-visible');
+  const hideAiPop = () => ui.aiPop?.classList.remove('is-visible');
+  const toggleAiPop = () => { if (ui.aiPop?.classList.contains('is-visible')) hideAiPop(); else { showAiPop(); ui.aiInput?.focus(); } };
 
   function buildAiPanel() {
     const msgs = el('div', { class: 'doc-ai__msgs', role: 'log', 'aria-live': 'polite' });
@@ -246,7 +226,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
       const bubble = el('div', { class: `doc-ai__msg doc-ai__msg--${who}` }, text);
       msgs.appendChild(bubble);
       msgs.scrollTop = msgs.scrollHeight;
-      ui.aiUpdatePop?.(); // reveal the popover once there's a conversation
+      showAiPop(); // reveal the popover once there's a conversation
       return bubble;
     };
 
@@ -299,28 +279,33 @@ export function createDocumentWorkspace({ bus, store, services }) {
       setTimeout(() => { thinking.textContent = respond(prompt); ui.aiMsgs.scrollTop = ui.aiMsgs.scrollHeight; }, 250);
     }
 
-    // Compact popover (messages + chips) that appears ABOVE the bar, only while the
-    // input is focused or there's a conversation — so at rest it's just the small bar.
+    // Compact popover (messages + chips) that opens ABOVE the bar. Hidden at rest —
+    // revealed on focus / by the `+` button / when a message arrives; collapsed by ✕.
     const pop = el('div', { class: 'doc-ai-pop' }, [msgs, el('div', { class: 'doc-ai__chips' }, chips)]);
     ui.aiPop = pop;
-    const updatePop = () => pop.classList.toggle('is-visible', document.activeElement === input || msgs.childElementCount > 0);
-    input.addEventListener('focus', updatePop);
-    input.addEventListener('blur', () => setTimeout(updatePop, 150));
-    ui.aiUpdatePop = updatePop;
+    input.addEventListener('focus', () => showAiPop());
+    // Clicking away collapses an EMPTY popover (just chips); a real conversation stays
+    // until the user dismisses it with ✕.
+    input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input && !msgs.childElementCount) hideAiPop(); }, 150));
 
-    // The small floating chat bar (Gemini-style pill): icon · input · send · close.
+    // The small floating chat bar (Gemini-style pill): `+` · input · send · ✕.
+    // `+` is the entry point for "what the AI can do" (currently the quick actions).
+    const plusBtn = el('button', {
+      class: 'doc-ai-bar__plus', type: 'button', 'aria-label': 'AI actions',
+      'data-tip': 'AI actions', onClick: () => toggleAiPop(),
+    }, el('span', { html: renderIcon('plus') }));
     const bar = el('div', { class: 'doc-ai-bar' }, [
-      el('span', { class: 'doc-ai-bar__ico', html: renderIcon('sparkle') }),
+      plusBtn,
       input,
       sendBtn,
       el('button', {
-        class: 'doc-ai-bar__close', type: 'button', 'aria-label': 'Close AI Assistant',
-        'data-tip': 'Close', onClick: () => closeAiPanel(),
+        class: 'doc-ai-bar__close', type: 'button', 'aria-label': 'Collapse',
+        'data-tip': 'Collapse', onClick: () => { hideAiPop(); input.blur(); },
       }, '✕'),
     ]);
     const dock = el('div', { class: 'doc-ai-dock', 'aria-label': 'AI Assistant' }, [pop, bar]);
     ui.aiPanel = dock;
-    // Float a compact bar at the bottom-centre of the editor (not a full panel).
+    // Float a compact bar at the bottom-centre of the editor (always visible).
     (ui.docMain || ui.docBody || root).appendChild(dock);
   }
 

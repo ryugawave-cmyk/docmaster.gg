@@ -858,34 +858,6 @@
   .doc-btn--export-glow .doc-btn__txt { animation: none; }
 }
 
-/* ---- AI Assistant button (gradient-glow pill) + docked right-side panel ---- */
-.doc-ai-btn {
-  display: inline-flex; align-items: center; gap: 7px;
-  height: 34px; padding: 0 14px;
-  border: 1.5px solid transparent; border-radius: 999px;
-  /* Two-layer background: solid fill (padding-box) inside a gradient border. */
-  background:
-    linear-gradient(var(--ws-surface, #fff), var(--ws-surface, #fff)) padding-box,
-    linear-gradient(100deg, #22d3ee, #6366f1, #a855f7, #ec4899) border-box;
-  background-size: 100% 100%, 260% 100%;
-  color: var(--ws-text); cursor: pointer; font: inherit;
-  box-shadow: 0 0 0 rgba(139, 92, 246, 0); transition: box-shadow .2s ease;
-  animation: doc-ai-flow 8s linear infinite;
-}
-.doc-ai-btn__ico { display: inline-flex; }
-.doc-ai-btn__ico .ws-icon { width: 16px; height: 16px; }
-.doc-ai-btn__ico { color: #a855f7; }
-.doc-ai-btn__txt {
-  font-size: 13px; font-weight: 700;
-  background: linear-gradient(100deg, #22d3ee, #6366f1, #a855f7, #ec4899);
-  background-size: 260% 100%;
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent; color: transparent;
-  animation: doc-ai-flow 8s linear infinite;
-}
-.doc-ai-btn:hover, .doc-ai-btn.is-on { box-shadow: 0 0 16px color-mix(in srgb, #a855f7 42%, transparent); }
-@keyframes doc-ai-flow { to { background-position: 260% 0, 260% 0; } }
-@media (prefers-reduced-motion: reduce) { .doc-ai-btn, .doc-ai-btn__txt { animation: none; } }
 
 /* Compact floating chat bar (Gemini-style pill) at the bottom-centre of the editor.
    Default closed; toggled by the AI Assistant button. A small popover with the
@@ -894,10 +866,17 @@
 .doc-ai-dock {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 9;
   width: min(620px, calc(100% - 40px));
-  display: none; flex-direction: column; gap: 8px; pointer-events: none;
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
 }
-.app-ws--document.is-ai-open .doc-ai-dock { display: flex; }
 .doc-ai-dock > * { pointer-events: auto; }
+/* Left `+` button — the entry point for AI actions / "what the AI can do". */
+.doc-ai-bar__plus {
+  flex: 0 0 auto; width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--ws-primary-soft, #eef2ff); color: var(--ws-primary-dark, #6d28d9);
+}
+.doc-ai-bar__plus:hover { background: color-mix(in srgb, #a855f7 20%, var(--ws-primary-soft, #eef2ff)); }
+.doc-ai-bar__plus .ws-icon { width: 18px; height: 18px; }
 .doc-ai-bar {
   display: flex; align-items: center; gap: 8px;
   height: 48px; padding: 0 6px 0 14px;
@@ -905,8 +884,6 @@
   background: var(--ws-surface, #fff); box-shadow: 0 8px 26px rgba(19, 22, 45, 0.18);
 }
 .doc-ai-bar:focus-within { border-color: color-mix(in srgb, #a855f7 55%, transparent); box-shadow: 0 8px 26px rgba(168, 85, 247, 0.22); }
-.doc-ai-bar__ico { display: inline-flex; color: #a855f7; flex: 0 0 auto; }
-.doc-ai-bar__ico .ws-icon { width: 18px; height: 18px; }
 .doc-ai-bar__close {
   flex: 0 0 auto; width: 30px; height: 30px; border: 0; border-radius: 50%; background: transparent;
   color: var(--ws-text-soft, #64748b); cursor: pointer; font-size: 13px;
