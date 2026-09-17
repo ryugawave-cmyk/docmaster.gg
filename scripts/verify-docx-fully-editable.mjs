@@ -112,5 +112,28 @@ check('consecutive tight lines get small spacing (<300 twips)', befores[2] < 300
 check('a blank-line gap yields large spacing (>900 twips)', befores[3] > 900);
 check('spacing is not a uniform constant (rhythm preserved)', new Set(befores).size >= 3);
 
+// Alignment inferred from geometry: a visually-centred title must use real center
+// alignment (jc) and NOT a left indent, so it stays centred when Word re-measures
+// the text in a different font (the "misses coordination/position" bug).
+const alignModel = {
+  PW: 794, PH: 1123,
+  pages: [{
+    w: 794, h: 1123,
+    objects: [
+      txt('CENTERED TITLE HERE', 150, 90, 494, 22), // balanced margins → center
+      txt('Left field: ____', 90, 160, 300),         // left → keeps indent
+    ],
+  }],
+};
+const aZip = new TextDecoder('latin1').decode(new Uint8Array(await modelToDocx(alignModel, { mode: 'layout' }).arrayBuffer()));
+const paras = [...aZip.matchAll(/<w:p>(<w:pPr>.*?<\/w:pPr>)?(.*?)<\/w:p>/g)]
+  .map((m) => ({ pPr: m[1] || '', text: [...(m[2] || '').matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((x) => x[1]).join('') }))
+  .filter((p) => p.text.trim());
+const title = paras.find((p) => p.text.includes('CENTERED TITLE'));
+const field = paras.find((p) => p.text.includes('Left field'));
+check('centred title uses real center alignment', !!title && /<w:jc w:val="center"\/>/.test(title.pPr));
+check('centred title carries NO left indent', !!title && !/<w:ind /.test(title.pPr));
+check('left field keeps its x indent', !!field && /<w:ind /.test(field.pPr));
+
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('\nAll "Fully Editable" checks passed.');

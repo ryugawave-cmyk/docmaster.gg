@@ -103,7 +103,7 @@ function pageToBlocks(pg, bodySize) {
       continue;
     }
     const line = lines[i];
-    blocks.push({ ...buildTextBlock(line, bodySize), _y: line.top, _bottom: line.bottom });
+    blocks.push({ ...buildTextBlock(line, bodySize, pg.w), _y: line.top, _bottom: line.bottom });
     i += 1;
   }
 
@@ -341,7 +341,37 @@ function buildTable(band, pageW) {
 
 /* ------------------------------ text blocks ----------------------------- */
 
-function buildTextBlock(line, bodySize) {
+/**
+ * Infer a line's alignment from its GEOMETRY (its margins within the page) rather
+ * than trusting the PDF run's `align`, which is almost always the default 'left'
+ * even for visually-centred titles. This matters because the DOCX renders in a
+ * different font than the PDF: a centred title placed by a fixed left-indent (its
+ * PDF x) drifts off-centre once Word re-measures the text, whereas a real `center`
+ * alignment stays centred at any width.
+ *
+ * • center — both side margins are non-trivial AND roughly equal.
+ * • right  — the line hugs the right edge with a wide gap on the left.
+ * Otherwise the caller's fallback (the run's own align, or 'left') is kept.
+ */
+function inferAlign(line, pageW, fallback) {
+  if (!pageW || !line || !line.cells || !line.cells.length) return fallback;
+  let left = Infinity, right = -Infinity;
+  for (const c of line.cells) {
+    if (c.x < left) left = c.x;
+    const r = c.x + (c.w || 0);
+    if (r > right) right = r;
+  }
+  const leftGap = left, rightGap = pageW - right;
+  if (leftGap < 0 || rightGap < 0 || right <= left) return fallback;
+  // Centred: balanced, non-trivial margins on both sides.
+  if (leftGap > pageW * 0.12 && rightGap > pageW * 0.12
+    && Math.abs(leftGap - rightGap) <= pageW * 0.08) return 'center';
+  // Right-aligned: tight against the right edge, wide gap on the left.
+  if (rightGap < pageW * 0.08 && leftGap > pageW * 0.2) return 'right';
+  return fallback;
+}
+
+function buildTextBlock(line, bodySize, pageW) {
   line.cells.sort((a, b) => a.x - b.x);
   const lines = runsToContentLines(line.cells);
   const plain = lines
@@ -351,7 +381,7 @@ function buildTextBlock(line, bodySize) {
   const size = Math.max(...line.cells.map((c) => c.fontSize || 0));
   const bold = line.cells.every((c) => c.bold);
   const style = styleOf({ ...lead, fontSize: size, bold });
-  const align = (lead && lead.align) || 'left';
+  const align = inferAlign(line, pageW, (lead && lead.align) || 'left');
 
   const isHeading = (size >= bodySize * 1.3 || (bold && size >= bodySize * 1.08)
     || isColoured(lead && lead.color)) && plain.length <= 140 && line.cells.length <= 3;

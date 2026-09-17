@@ -678,7 +678,11 @@ function styledPara(b, addImage, beforePx = null) {
       + body + '</w:p>';
   }
   listBreak(); // a non-list paragraph/heading ends any running numbered list
-  const ind = b.x > 4 && !shading ? `<w:ind w:left="${TW(b.x)}"/>` : '';
+  // A left indent only makes sense for left/justified text; for centred or right
+  // text the x-indent would fight `jc` and shove the line off-position (the reported
+  // "misses coordination" bug), so let the alignment place it instead.
+  const centeredOrRight = b.align === 'center' || b.align === 'right';
+  const ind = b.x > 4 && !shading && !centeredOrRight ? `<w:ind w:left="${TW(b.x)}"/>` : '';
   return `<w:p><w:pPr><w:spacing w:before="${before}" w:after="${after}"/>${shading}${jc}${ind}</w:pPr>`
     + body + '</w:p>';
 }
