@@ -39,6 +39,7 @@ const model = {
   pages: [{ w: 600, h: 800, bg: PNG, objects: [
     { type: 'text', text: 'During the 60 hours duration', x: 60, y: 100, w: 300, h: 16, fontSize: 14, imported: true, boxBg: 'ffffff' },
     { type: 'text', text: '1.1 GENERAL', x: 60, y: 140, w: 120, h: 18, fontSize: 15, imported: true, boxBg: 'ffffff' },
+    { type: 'text', text: 'Underlined bit', x: 60, y: 170, w: 120, h: 16, fontSize: 14, underline: true, imported: true, boxBg: 'ffffff' },
   ] }],
 };
 
@@ -56,6 +57,7 @@ console.log('— erased raster (normal path) —');
 const erased = new TextDecoder('latin1').decode(new Uint8Array(await modelToDocx(model, { mode: 'exact', cleanBg: [PNG] }).arrayBuffer()));
 noBox(erased);
 check('erased path: frames are transparent (no w:shd fill)', !erased.includes('<w:shd '));
+check('underline styling is carried into the overlay', erased.includes('<w:u w:val="single"/>'));
 
 // Fallback (masking unavailable): frames shaded to hide baked glyphs — still no box.
 console.log('— fallback (no cleanBg) —');

@@ -969,8 +969,8 @@ function anchor(x, y, w, h, id, graphicData, behind = false) {
 function segRunsXml(seg) {
   return seg.parts.map(({ run, space }) => {
     const rpr = runProps({
-      bold: run.bold, italic: run.italic, size: SZHP(run.fontSize || 14),
-      color: run.color, font: run.fontFamily,
+      bold: run.bold, italic: run.italic, underline: run.underline,
+      size: SZHP(run.fontSize || 14), color: run.color, font: run.fontFamily,
     });
     const t = (space ? ' ' : '') + String(run.text == null ? '' : run.text).replace(/\n/g, ' ');
     return '<w:r>' + rpr + `<w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
