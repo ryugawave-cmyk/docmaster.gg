@@ -48,11 +48,16 @@ const COMPRESS_LEVELS = [
   { id: 'high', label: 'High', hint: 'Smallest file, still sharp text', scale: 1.5, quality: 0.6 },
 ];
 
-// PDF → Word: the two headline modes get large, premium selection cards. Just the
+// PDF → Word: the headline modes get large, premium selection cards. Just the
 // title (+ a "Recommended" badge) — no explanatory copy or keyword chips — so the
 // choice stays clean and users pick on the label alone.
+//  • 'layout' — FULLY EDITABLE: real Word paragraphs, tables and lists you click and
+//    type into directly (native reconstruction — no floating boxes, no model download).
+//  • 'ai'     — model-assisted structure detection (downloads a small model first run).
+//  • 'exact'  — pixel-faithful copy; text rides in positioned boxes over the page raster.
 const WORD_MODE_CARDS = [
-  { id: 'ai', icon: 'sparkle', title: 'Editable (AI)', recommended: true },
+  { id: 'layout', icon: 'edit', title: 'Fully Editable', recommended: true },
+  { id: 'ai', icon: 'sparkle', title: 'Editable (AI)' },
   { id: 'exact', icon: 'document', title: 'Exact Copy' },
 ];
 // Power-user modes, tucked into a collapsed "Advanced options" disclosure so the
@@ -140,7 +145,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
   let overlay = null;
   let selectedId = 'compress';
   const settings = {
-    wordMode: 'ai', imgRes: 'screen',
+    wordMode: 'layout', imgRes: 'screen',
     compressMode: 'level', compressLevel: 'recommended',
     compressTargetValue: 0, compressTargetUnit: 'KB',
   };
@@ -354,7 +359,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
     const wrap = el('div', { class: 'bpx-exp__wordmode' });
 
     // Advanced modes aren't selectable yet; make sure we never sit on one.
-    if (WORD_MODE_ADVANCED.some((m) => m.id === settings.wordMode)) settings.wordMode = 'ai';
+    if (WORD_MODE_ADVANCED.some((m) => m.id === settings.wordMode)) settings.wordMode = 'layout';
 
     const sync = () => {
       for (const c of wrap.querySelectorAll('.bpx-exp__card')) {
