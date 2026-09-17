@@ -17,7 +17,7 @@
  */
 import { zipBlob, dataURLToBytes } from '../zip.js';
 import { xml, normHex, PX_TO_PT, PX_TO_TWIP, PX_TO_EMU, buildContentModel, hasComplexScript } from './model.js';
-import { reconstructPages, detectTableRegions } from './reconstruct.js';
+import { reconstructPages, detectTableRegions, detectListItem } from './reconstruct.js';
 
 const PT = (px) => Math.round(px * PX_TO_PT * 100) / 100; // px → pt (2dp)
 const TW = (px) => Math.max(0, Math.round(px * PX_TO_TWIP)); // px → twips
@@ -876,10 +876,16 @@ function aiTableToTbl(b, innerW) {
 function aiParaToBlock(b) {
   const isHeading = b.heading === 1 || b.heading === 2 || b.heading === 3;
   const st = b.style || {};
+  const rawText = b.text != null ? String(b.text) : '';
+  // A non-heading paragraph whose text starts with a list marker becomes a real
+  // Word list item (marker stripped, `lines` dropped so it isn't duplicated) — so
+  // lists survive the recommended AI path, not just the geometry-recovered blocks.
+  const li = !isHeading ? detectListItem(rawText) : null;
   return {
     type: isHeading ? 'heading' : 'paragraph',
-    text: b.text != null ? String(b.text) : '',
-    lines: b.lines,
+    text: li ? li.text : rawText,
+    lines: li ? undefined : b.lines,
+    list: li ? (li.kind === 'number' ? { kind: 'number', start: li.start } : { kind: 'bullet' }) : undefined,
     align: b.align || 'left', x: 0,
     style: {
       bold: st.bold || isHeading,
