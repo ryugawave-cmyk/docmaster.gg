@@ -993,36 +993,34 @@ function absoluteBody(content, addImage, cleanBg) {
   let z = 1;
 
   pages.forEach((pg, pi) => {
-    const anchors = [];
+    const anchors = [];  // floating drawings only (raster bg, images, table borders)
+    const framed = [];   // positioned TEXT FRAMES — body paragraphs, no box outline
     // Prefer the text-erased raster (see rasterImages.maskExtractedText): with the
-    // baked glyphs already painted out, Google Docs can't bleed the original text
-    // through the editable overlay boxes. Falls back to the original background.
+    // baked glyphs already painted out, the overlay frames can be fully transparent
+    // (nothing shows around the text). Falls back to the original background.
     const bgSrc = (cleanBg && cleanBg[pi]) || pg.bg;
     const hasRaster = !!bgSrc;
+    const erased = !!(cleanBg && cleanBg[pi]); // glyphs already removed → transparent frames
 
     if (hasRaster) {
-      // Full-page background raster (all graphics), then masked editable text.
+      // Full-page background raster (all graphics), then editable text on top.
       // The raster already carries every picture (logo/signature/photo/QR) exactly,
       // so we do NOT overlay recovered images here: recovery is best-effort and a
       // mis-detected region (e.g. a pale form-field box) would drop a blank crop
       // over real text. Exact = raster + editable text, nothing covering it.
       const bgId = addImage(bgSrc);
       anchors.push(anchor(0, 0, pg.w, pg.h, z++, pictureGraphic(pg.w, pg.h, bgId, z), true));
-      // Pass 2 — "make editable": overlay the text as LINE-SEGMENT boxes (whole
-      // phrases/lines), not one box per glyph, so the result is genuinely editable
-      // (you type into sentences, not fragments). Each segment box is filled with
-      // its sampled background so the baked glyphs underneath stay masked. Complex-
-      // script runs are excluded from segments and left baked in the raster (an
-      // editable overlay would scramble their matras/conjuncts — see hasComplexScript;
-      // rasterImages.maskExtractedText keeps the matching runs in the raster).
+      // Overlay the text as LINE-SEGMENT positioned FRAMES (whole phrases/lines),
+      // not one per glyph, so the result is genuinely editable (you type into
+      // sentences). Frames carry no shape outline, so no grey box is drawn around
+      // each line. When the raster wasn't erased, the frame is shaded with its
+      // sampled background to mask the baked glyph. Complex-script runs are excluded
+      // and left baked in the raster (an editable overlay would scramble matras).
       for (const seg of segmentRuns(pg.runs, { mask: true })) {
         const fs = seg.parts[0].run.fontSize || 14;
-        // Keep the mask box tight to the segment's real extent so its fill can't
-        // bleed onto an adjacent border/seal/graphic in the raster underneath.
-        // spAutoFit (in lineTextboxGraphic) then grows it just enough to fit text.
         const w = Math.max(seg.right - seg.x, fs * 0.5);
         const h = Math.max(seg.h || 0, fs * 1.3);
-        anchors.push(textboxAnchor(seg.x, seg.top, w, h, z++, seg));
+        framed.push(framedSeg(seg, w, h, erased));
       }
     } else {
       // 1) Table cell borders first (drawn behind text/images).
@@ -1038,28 +1036,25 @@ function absoluteBody(content, addImage, cleanBg) {
         const rId = addImage(im.src);
         anchors.push(anchor(im.x, im.y, im.w, im.h, z++, pictureGraphic(im.w, im.h, rId, z)));
       }
-      // 3) Text as line-segment editable text boxes (whole phrases), on top.
+      // 3) Text as positioned frames (no raster to mask → always transparent).
       for (const seg of segmentRuns(pg.runs, { mask: false })) {
         const fs = seg.parts[0].run.fontSize || 14;
         const w = (seg.right - seg.x) + fs * 1.4;
         const h = Math.max(seg.h || 0, fs * 1.25) + 2;
-        anchors.push(textboxAnchor(seg.x, seg.top, w, h, z++, seg));
+        framed.push(framedSeg(seg, w, h, true));
       }
     }
 
     const secW = TW(pg.w), secH = TW(pg.h);
     const sectPr = `<w:sectPr><w:pgSz w:w="${secW}" w:h="${secH}"/>`
       + '<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>';
-    // All anchors ride one paragraph's run; page-relative offsets mean sequence
-    // affects only z-order, never position.
-    const run = anchors.length ? `<w:r>${anchors.join('')}</w:r>` : '<w:r><w:t/></w:r>';
-    if (pi < pages.length - 1) {
-      parts.push(`<w:p>${run}</w:p>`);
-      parts.push(`<w:p><w:pPr>${sectPr}</w:pPr></w:p>`); // ends section → page break
-    } else {
-      parts.push(`<w:p>${run}</w:p>`);
-      parts.push(sectPr);
-    }
+    // One carrier paragraph holds all floating drawings (page-relative offsets → order
+    // is only z-order); the positioned text frames follow as their own paragraphs.
+    if (anchors.length) parts.push(`<w:p><w:r>${anchors.join('')}</w:r></w:p>`);
+    for (const f of framed) parts.push(f);
+    if (!anchors.length && !framed.length) parts.push('<w:p/>');
+    if (pi < pages.length - 1) parts.push(`<w:p><w:pPr>${sectPr}</w:pPr></w:p>`); // section break → new page
+    else parts.push(sectPr);
   });
 
   if (!pages.length) {
@@ -1145,15 +1140,10 @@ function anchor(x, y, w, h, id, graphicData, behind = false) {
     + '</wp:anchor></w:drawing>';
 }
 
-/** The txbxContent paragraph for one line-segment: its words emitted as separate
- *  styled runs in a single paragraph, so per-word bold/colour/size survive while
- *  the whole line edits as a unit. Shared by the DrawingML (wps) box and its VML
- *  fallback so both readers get identical text. */
-function segParagraph(seg) {
-  const first = seg.parts[0].run;
-  const jc = first.align === 'center' ? '<w:jc w:val="center"/>'
-    : first.align === 'right' ? '<w:jc w:val="right"/>' : '';
-  const runsXml = seg.parts.map(({ run, space }) => {
+/** One line-segment's words as separate styled runs (per-word bold/colour/size
+ *  survive while the whole line edits as a unit). Shared by the positioned frame. */
+function segRunsXml(seg) {
+  return seg.parts.map(({ run, space }) => {
     const rpr = runProps({
       bold: run.bold, italic: run.italic, size: SZHP(run.fontSize || 14),
       color: run.color, font: run.fontFamily,
@@ -1161,63 +1151,33 @@ function segParagraph(seg) {
     const t = (space ? ' ' : '') + String(run.text == null ? '' : run.text).replace(/\n/g, ' ');
     return '<w:r>' + rpr + `<w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
   }).join('');
-  return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>${runsXml}</w:p>`;
 }
 
 /**
- * An editable text-box overlay for ONE line-segment, wrapped so BOTH the modern
- * DrawingML text box and a legacy VML text box are available and Word gets a
- * genuine, double-click-editable box:
- *   • <mc:Choice Requires="wps"> — the DrawingML/wps box (Word 2010+, LibreOffice,
- *     Google Docs). Positioning/masking identical to before.
- *   • <mc:Fallback> — a VML <v:rect>/<v:textbox> at the same page coordinates, for
- *     readers that don't understand wps (older Word, some editing paths).
- * The `id` drives both z-order (relativeHeight / VML z-index).
+ * Exact-mode text overlay for ONE line-segment as a POSITIONED TEXT FRAME
+ * (`w:framePr`) rather than a floating text-box shape. A frame is a real body
+ * paragraph pinned to absolute page coordinates: it edits like normal text and —
+ * crucially — carries NO shape outline, so no reader draws the grey "debug"
+ * rectangle around every line that text boxes produce. Click to type; a selection
+ * outline shows only while selected/editing.
+ *
+ * `transparent` (the raster's glyphs were erased, the normal Exact path) → no fill,
+ * no border: nothing shows around the text. Otherwise the frame is shaded with the
+ * segment's sampled background to mask the glyph still baked into the raster beneath
+ * (a faint fill in off-white areas, but never a box outline and never doubled text).
+ * `wrap="none"` lets frames overlap freely; `hRule="exact"` keeps the line height.
  */
-function textboxAnchor(x, y, w, h, id, seg) {
-  return '<mc:AlternateContent>'
-    + `<mc:Choice Requires="wps">${anchor(x, y, w, h, id, lineTextboxGraphic(w, h, seg))}</mc:Choice>`
-    + `<mc:Fallback>${vmlTextbox(x, y, w, h, id, seg)}</mc:Fallback>`
-    + '</mc:AlternateContent>';
-}
-
-/** Legacy VML text box (fallback for the wps box). <v:rect> is a built-in VML
- *  shape (no <v:shapetype> needed) placed at absolute page coordinates in points;
- *  `seg.bg` fills it to mask the raster glyphs beneath, empty → unfilled. */
-function vmlTextbox(x, y, w, h, id, seg) {
-  const para = segParagraph(seg);
-  const hex = normHex(seg.bg);
-  const fillAttr = hex ? ` fillcolor="#${hex}"` : ' filled="f"';
-  const style = 'position:absolute;'
-    + `margin-left:${PT(Math.max(0, x))}pt;margin-top:${PT(Math.max(0, y))}pt;`
-    + `width:${PT(w)}pt;height:${PT(h)}pt;z-index:${id};`
-    + 'mso-position-horizontal-relative:page;mso-position-vertical-relative:page';
-  return '<w:pict>'
-    + `<v:rect id="obj${id}" o:spid="_x0000_s${1000 + id}" style="${style}"${fillAttr} stroked="f">`
-    // inset 0 + fit-shape-to-text mirrors the wps box's zero insets + spAutoFit.
-    + '<v:textbox inset="0,0,0,0" style="mso-fit-shape-to-text:t">'
-    + `<w:txbxContent>${para}</w:txbxContent>`
-    + '</v:textbox></v:rect></w:pict>';
-}
-
-/** An editable text box holding ONE line-segment: the segment's words emitted as
- *  separate styled runs in a single paragraph, so per-word bold/colour/size survive
- *  while the whole line edits as a unit. `seg.bg` (6-hex, no #) fills the box to
- *  mask the same text baked into the page raster beneath it; empty → transparent. */
-function lineTextboxGraphic(w, h, seg) {
-  const W = EMU(w), H = EMU(h);
-  const para = segParagraph(seg);
-  const hex = normHex(seg.bg);
-  const fill = hex ? `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>` : '<a:noFill/>';
-  return `<a:graphicData uri="${WPS_NS}"><wps:wsp xmlns:wps="${WPS_NS}"><wps:cNvSpPr txBox="1"/>`
-    + `<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${W}" cy="${H}"/></a:xfrm>`
-    + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}<a:ln><a:noFill/></a:ln></wps:spPr>`
-    + `<wps:txbx><w:txbxContent>${para}</w:txbxContent></wps:txbx>`
-    // spAutoFit: the shape resizes to fit its single line of text, so Word AND
-    // LibreOffice never clip it (no red "text overflow" marker) and the mask fill
-    // hugs the text instead of over-painting neighbouring borders/graphics.
-    + '<wps:bodyPr rot="0" vert="horz" wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" '
-    + 'anchor="t" anchorCtr="0"><a:spAutoFit/></wps:bodyPr></wps:wsp></a:graphicData>';
+function framedSeg(seg, w, h, transparent) {
+  const first = seg.parts[0].run;
+  const jc = first.align === 'center' ? '<w:jc w:val="center"/>'
+    : first.align === 'right' ? '<w:jc w:val="right"/>' : '';
+  const fill = transparent ? '' : normHex(seg.bg);
+  const shd = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : '';
+  const framePr = `<w:framePr w:w="${TW(w)}" w:h="${TW(h)}" w:hRule="exact" w:wrap="none"`
+    + ` w:vAnchor="page" w:hAnchor="page" w:x="${TW(Math.max(0, seg.x))}" w:y="${TW(Math.max(0, seg.top))}"`
+    + ' w:hSpace="0" w:vSpace="0"/>';
+  return `<w:p><w:pPr>${framePr}${shd}<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>`
+    + segRunsXml(seg) + '</w:p>';
 }
 
 /** A no-fill, thin-outline rectangle used to draw a table cell's borders. */
