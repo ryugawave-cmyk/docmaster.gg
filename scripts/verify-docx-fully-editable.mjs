@@ -135,5 +135,22 @@ check('centred title uses real center alignment', !!title && /<w:jc w:val="cente
 check('centred title carries NO left indent', !!title && !/<w:ind /.test(title.pPr));
 check('left field keeps its x indent', !!field && /<w:ind /.test(field.pPr));
 
+// Form fill-in fields: a run of underscores must convert to an UNDERLINED blank (so
+// typed text sits above the line, not on top of underscore glyphs / the border), and
+// the label before it must stay normal (not underlined).
+const fieldModel = {
+  PW: 794, PH: 1123,
+  pages: [{ w: 794, h: 1123, objects: [
+    { type: 'text', text: 'Application No: ____________________', x: 90, y: 200, w: 400, h: 18, fontSize: 15 },
+  ] }],
+};
+const fZip = new TextDecoder('latin1').decode(new Uint8Array(await modelToDocx(fieldModel, { mode: 'layout' }).arrayBuffer()));
+check('fill-in blank becomes an underlined run', /<w:u w:val="single"\/>/.test(fZip));
+check('no underscore glyphs left in the text', !/<w:t[^>]*>[^<]*_{3,}[^<]*<\/w:t>/.test(fZip));
+check('field label kept (normal run)', fZip.includes('Application No: '));
+// The label run (before the blank) must not be underlined.
+const labelRun = fZip.match(/<w:r>(?:(?!<\/w:r>).)*?Application No: <\/w:t><\/w:r>/s);
+check('label run is not underlined', !!labelRun && !labelRun[0].includes('<w:u '));
+
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('\nAll "Fully Editable" checks passed.');

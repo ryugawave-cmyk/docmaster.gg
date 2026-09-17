@@ -447,12 +447,13 @@ function framedParagraph(box, mask) {
 
 /* --------------------------- editable / hybrid --------------------------- */
 
-function runProps({ bold, italic, size, color, font }) {
+function runProps({ bold, italic, underline, size, color, font }) {
   return '<w:rPr>' +
     `<w:rFonts w:ascii="${xml(font || 'Calibri')}" w:hAnsi="${xml(font || 'Calibri')}"/>` +
     (bold ? '<w:b/>' : '') + (italic ? '<w:i/>' : '') +
     (color ? `<w:color w:val="${xml(color)}"/>` : '') +
     `<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>` +
+    (underline ? '<w:u w:val="single"/>' : '') + // schema order: u sits after sz
     '</w:rPr>';
 }
 
@@ -461,6 +462,34 @@ function textRuns(text, rpr) {
   return String(text).split('\n').map((line, i) =>
     '<w:r>' + rpr + (i ? '<w:br/>' : '') + `<w:t xml:space="preserve">${xml(line)}</w:t></w:r>`
   ).join('');
+}
+
+// A fill-in blank in a form is a run of underscores (e.g. "Name: ______"). PDFs draw
+// them as underscore GLYPHS sitting on the text baseline, so anything typed there
+// lands on the same baseline and collides with the underscores/border. The correct,
+// editable Word representation is a run of blank spaces with UNDERLINE formatting: the
+// underline draws the line just below the baseline, so text typed into the field sits
+// naturally ABOVE it. We add a leading space as left padding inside the field.
+const FIELD_BLANK_RE = /_{3,}/g;
+/** Emit `text` as runs, converting underscore fill-in blanks to underlined spaces so
+ *  the field is an editable, non-overlapping fill line. `marks` is the base run style. */
+function fieldRuns(text, marks) {
+  const s = String(text == null ? '' : text);
+  if (!/_{3,}/.test(s)) return textRuns(s, runProps(marks));
+  const base = runProps(marks);
+  const under = runProps({ ...marks, underline: true });
+  let out = '';
+  let last = 0;
+  s.replace(FIELD_BLANK_RE, (m, idx) => {
+    if (idx > last) out += textRuns(s.slice(last, idx), base);
+    // ' ' left pad + one blank space per underscore (kept editable; underline stroke
+    // replaces the glyphs so typed text no longer sits on top of them).
+    out += '<w:r>' + under + `<w:t xml:space="preserve">${xml(' ' + ' '.repeat(m.length))}</w:t></w:r>`;
+    last = idx + m.length;
+    return m;
+  });
+  if (last < s.length) out += textRuns(s.slice(last), base);
+  return out;
 }
 
 /** Flow the reading-order blocks as normal Word paragraphs. */
@@ -640,13 +669,16 @@ function inlineImagePara(b, addImage, pageW) {
 }
 
 /** Render content lines (see reconstruct.runsToContentLines) as a paragraph body:
- *  lines stack via <w:br/>; tokens within a line are inline (image runs or text). */
-function renderContent(lines, rpr, addImage) {
+ *  lines stack via <w:br/>; tokens within a line are inline (image runs or text).
+ *  `marks` is the base run style; text tokens go through fieldRuns so form fill-in
+ *  blanks become underlined (editable, non-overlapping) fields. */
+function renderContent(lines, marks, addImage) {
+  const rpr = runProps(marks);
   return (lines || []).map((toks, i) => {
     const br = i ? `<w:r>${rpr}<w:br/></w:r>` : '';
     const body = (toks || []).map((t) => (t.img
       ? inlineImageRun(t.img, addImage)
-      : textRuns(t.text, rpr))).join('');
+      : fieldRuns(t.text, marks))).join('');
     return br + body;
   }).join('');
 }
@@ -665,11 +697,11 @@ function styledPara(b, addImage, beforePx = null) {
   // to the old fixed heading/body spacing (AI-region paragraphs, which have no y).
   const before = beforePx == null ? (b.type === 'heading' ? 80 : 20) : TW(beforePx);
   const after = beforePx == null ? (b.type === 'heading' ? 40 : 20) : 0;
-  const rpr = runProps({
+  const marks = {
     bold: st.bold || b.type === 'heading', italic: st.italic,
     size: SZHP(st.size || 16), color: st.color, font: st.font,
-  });
-  const body = (b.lines && b.lines.length) ? renderContent(b.lines, rpr, addImage) : textRuns(b.text, rpr);
+  };
+  const body = (b.lines && b.lines.length) ? renderContent(b.lines, marks, addImage) : fieldRuns(b.text, marks);
   // Real, editable Word list item: `<w:numPr>` drives the marker + indent (no manual
   // `w:ind`), so numbers renumber and bullets stay bullets when the user edits.
   if (b.list && b.list.kind) {
@@ -737,12 +769,12 @@ function cellXml(c, cols, addImage) {
   const st = c.style || {};
   const jc = c.align === 'center' ? '<w:jc w:val="center"/>'
     : c.align === 'right' ? '<w:jc w:val="right"/>' : '';
-  const rpr = runProps({
+  const marks = {
     bold: st.bold, italic: st.italic, size: SZHP(st.size || 14),
     color: st.color, font: st.font,
-  });
-  const body = (c.lines && c.lines.length) ? renderContent(c.lines, rpr, addImage)
-    : (c.text ? textRuns(c.text, rpr) : '');
+  };
+  const body = (c.lines && c.lines.length) ? renderContent(c.lines, marks, addImage)
+    : (c.text ? fieldRuns(c.text, marks) : '');
   const para = `<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/>${jc}</w:pPr>`
     + body + '</w:p>';
   const span = c.span > 1 ? `<w:gridSpan w:val="${c.span}"/>` : '';
