@@ -533,25 +533,42 @@ function faithfulBody(content, addImage, inlineImages = false) {
   let drawId = 1;
   const nextDrawId = () => drawId++;
 
+  const MARGIN_PX = 24; // matches the section's 360-twip top margin below
+
   pages.forEach((pg, pi) => {
     const imgBlocks = [];
     const flow = [];
     let lastWasTable = false;
+    // Reproduce the PDF's VERTICAL RHYTHM: each flow block is spaced from the bottom
+    // of the previous one by the real pixel gap, so blank lines / section breaks in
+    // the source reappear instead of everything collapsing to a uniform tight stack.
+    let prevBottom = MARGIN_PX;
+    const gapBefore = (b) => Math.max(0, (b._y || 0) - prevBottom);
+    const advance = (b) => { prevBottom = Math.max(prevBottom, b._bottom || b._y || prevBottom); };
     for (const b of pg.blocks) {
       if (b.type === 'table') {
+        const before = gapBefore(b);
         if (lastWasTable) flow.push(TABLE_SEP); // keep adjacent tables from merging
+        else if (before > 4) flow.push(spacerPara(before)); // tables can't carry before-spacing
         listBreak(); // a table ends any running numbered list
         flow.push(tableXml(b, addImage));
+        advance(b);
         lastWasTable = true;
       } else if (b.type === 'image') {
         // Inline mode (used when the target is the flowing Document editor): emit the
         // picture INLINE at its reading-order position so it pushes content down.
         // Floated at absolute PDF coordinates it would overlap the reflowed text,
         // because the flow editor does not preserve the PDF's y positions.
-        if (inlineImages) { listBreak(); flow.push(inlineImagePara(b, addImage, pg.w)); lastWasTable = false; }
-        else imgBlocks.push(b);
+        if (inlineImages) {
+          const before = gapBefore(b);
+          listBreak();
+          if (before > 4) flow.push(spacerPara(before));
+          flow.push(inlineImagePara(b, addImage, pg.w));
+          advance(b);
+          lastWasTable = false;
+        } else imgBlocks.push(b); // floating: doesn't take part in the flow's rhythm
       }
-      else { flow.push(styledPara(b, addImage)); lastWasTable = false; }
+      else { flow.push(styledPara(b, addImage, gapBefore(b))); advance(b); lastWasTable = false; }
     }
     if (lastWasTable) flow.push(TABLE_SEP); // required paragraph after a trailing table
     // Images as FLOATING, page-anchored drawings at their exact PDF position and
@@ -637,14 +654,17 @@ function renderContent(lines, rpr, addImage) {
 /** A styled heading/paragraph, preserving size/weight/italic/colour/alignment,
  *  left indent, and a coloured bar (paragraph shading) when the run sat on one.
  *  `b.lines` (image/text tokens) take precedence over the plain `b.text`. */
-function styledPara(b, addImage) {
+function styledPara(b, addImage, beforePx = null) {
   const st = b.style || {};
   const shading = shd(st.boxBg);
   const jc = b.align === 'center' ? '<w:jc w:val="center"/>'
     : b.align === 'right' ? '<w:jc w:val="right"/>'
       : b.align === 'justify' ? '<w:jc w:val="both"/>' : '';
-  const before = b.type === 'heading' ? 80 : 20;
-  const after = b.type === 'heading' ? 40 : 20;
+  // When the caller measured the real gap above this block (faithful/layout mode),
+  // use it verbatim so the PDF's vertical spacing is preserved; otherwise fall back
+  // to the old fixed heading/body spacing (AI-region paragraphs, which have no y).
+  const before = beforePx == null ? (b.type === 'heading' ? 80 : 20) : TW(beforePx);
+  const after = beforePx == null ? (b.type === 'heading' ? 40 : 20) : 0;
   const rpr = runProps({
     bold: st.bold || b.type === 'heading', italic: st.italic,
     size: SZHP(st.size || 16), color: st.color, font: st.font,
@@ -654,13 +674,19 @@ function styledPara(b, addImage) {
   // `w:ind`), so numbers renumber and bullets stay bullets when the user edits.
   if (b.list && b.list.kind) {
     const np = listNumPr(b.list);
-    return `<w:p><w:pPr>${np}${shading}<w:spacing w:before="0" w:after="${after}"/>${jc}</w:pPr>`
+    return `<w:p><w:pPr>${np}${shading}<w:spacing w:before="${before}" w:after="${after}"/>${jc}</w:pPr>`
       + body + '</w:p>';
   }
   listBreak(); // a non-list paragraph/heading ends any running numbered list
   const ind = b.x > 4 && !shading ? `<w:ind w:left="${TW(b.x)}"/>` : '';
   return `<w:p><w:pPr><w:spacing w:before="${before}" w:after="${after}"/>${shading}${jc}${ind}</w:pPr>`
     + body + '</w:p>';
+}
+
+/** An empty paragraph of an EXACT pixel height — used to reproduce a large vertical
+ *  gap before a block (e.g. a table) that can't carry `w:spacing w:before`. */
+function spacerPara(px) {
+  return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="${Math.max(1, TW(px))}" w:lineRule="exact"/></w:pPr></w:p>`;
 }
 
 /** Emit a detected grid as a real Word table (editable cells, borders, spans). */

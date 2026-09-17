@@ -64,10 +64,10 @@ export function reconstructDocument(model, name) {
   };
 }
 
-/** Strip the internal `_y` ordering key (and other private fields) from a block so
- *  the exported JSON is a clean, stable structure. */
+/** Strip the internal geometry keys (`_y`/`_bottom`, used for ordering + spacing)
+ *  from a block so the exported JSON is a clean, stable structure. */
 function cleanBlock(b) {
-  const { _y, ...rest } = b;
+  const { _y, _bottom, ...rest } = b;
   return rest;
 }
 
@@ -97,19 +97,21 @@ function pageToBlocks(pg, bodySize) {
     // A table band = ≥2 consecutive multi-cell lines whose columns line up.
     const band = collectTableBand(lines, i);
     if (band) {
-      blocks.push({ ...buildTable(band.lines, pg.w), _y: band.lines[0].top });
+      const lastLn = band.lines[band.lines.length - 1];
+      blocks.push({ ...buildTable(band.lines, pg.w), _y: band.lines[0].top, _bottom: lastLn.bottom });
       i = band.end;
       continue;
     }
     const line = lines[i];
-    blocks.push({ ...buildTextBlock(line, bodySize), _y: line.top });
+    blocks.push({ ...buildTextBlock(line, bodySize), _y: line.top, _bottom: line.bottom });
     i += 1;
   }
 
   // Interleave images (discrete objects and/or images cropped out of the page
-  // raster) by vertical position so a side photo lands near its row.
+  // raster) by vertical position so a side photo lands near its row. `_bottom` (the
+  // block's real lower edge) lets the exporter reproduce the PDF's vertical gaps.
   for (const im of (pg.images || [])) {
-    blocks.push({ type: 'image', src: im.src, x: im.x, y: im.y, w: im.w, h: im.h, _y: im.y });
+    blocks.push({ type: 'image', src: im.src, x: im.x, y: im.y, w: im.w, h: im.h, _y: im.y, _bottom: (im.y || 0) + (im.h || 0) });
   }
   blocks.sort((a, b) => (a._y || 0) - (b._y || 0));
   return blocks;

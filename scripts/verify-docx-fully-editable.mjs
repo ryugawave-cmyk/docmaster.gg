@@ -90,5 +90,27 @@ check('numbered marker stripped (text kept)', zip.includes('Review numbers') && 
 // A page section keeps page size / breaks (not one endless page).
 check('page section present (<w:sectPr>)', zip.includes('<w:sectPr>'));
 
+// Vertical rhythm: the PDF's real gaps must be reproduced as paragraph spacing, not
+// collapsed to a uniform tight stack (the "doesn't look like the original" bug).
+const spacingModel = {
+  PW: 794, PH: 1123,
+  pages: [{
+    w: 794, h: 1123,
+    objects: [
+      txt('Header', 60, 90, 200, 20),
+      txt('Tight line A', 60, 200, 200),   // ~92px gap after header
+      txt('Tight line B', 60, 224, 200),   // ~6px gap (consecutive)
+      txt('After a blank gap', 60, 330, 200), // ~88px gap (blank line)
+    ],
+  }],
+};
+const sZip = new TextDecoder('latin1').decode(new Uint8Array(await modelToDocx(spacingModel, { mode: 'layout' }).arrayBuffer()));
+const befores = [...sZip.matchAll(/<w:spacing w:before="(\d+)"/g)].map((m) => +m[1]);
+// Expect: [Header ~66px, A ~92px, B ~6px, blank ~88px] in twips (px*15).
+check('measured before-spacing captured for each block', befores.length >= 4);
+check('consecutive tight lines get small spacing (<300 twips)', befores[2] < 300);
+check('a blank-line gap yields large spacing (>900 twips)', befores[3] > 900);
+check('spacing is not a uniform constant (rhythm preserved)', new Set(befores).size >= 3);
+
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('\nAll "Fully Editable" checks passed.');
