@@ -100,21 +100,5 @@ check('literal "1. Alpha step" marker removed from body', !zip.includes('1. Alph
 check('list text preserved (Alpha step / First bullet)', zip.includes('Alpha step') && zip.includes('First bullet'));
 check('exactly two numbered <w:numId val=2> items (Alpha, Beta)', count(zip, '<w:numId w:val="2"/>') === 2);
 
-/* ---- AI mode: model-classified paragraphs also become list items ---- */
-const aiPages = [{
-  blocks: [
-    { kind: 'paragraph', text: 'Intro paragraph.' },
-    { kind: 'paragraph', text: '• AI bullet one' },
-    { kind: 'paragraph', text: '• AI bullet two' },
-    { kind: 'paragraph', text: '1. AI step one' },
-    { kind: 'paragraph', text: '2. AI step two' },
-  ],
-}];
-const aiBlob = modelToDocx(model, { mode: 'ai', name: 'ai-lists', aiPages });
-const aiZip = new TextDecoder('latin1').decode(new Uint8Array(await aiBlob.arrayBuffer()));
-check('AI path: emits native numbering', aiZip.includes('<w:numPr>') && aiZip.includes('word/numbering.xml'));
-check('AI path: bullet marker stripped', aiZip.includes('AI bullet one') && !aiZip.includes('• AI bullet one'));
-check('AI path: numbered marker stripped', aiZip.includes('AI step one') && !aiZip.includes('1. AI step one'));
-
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('\nAll DOCX list-reconstruction checks passed.');

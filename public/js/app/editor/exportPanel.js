@@ -21,7 +21,6 @@ import { modelHasVisibleContent } from './pdfExport.js';
 import { compressToTarget } from './pdfCompressor.js';
 import { buildContentModel } from '../services/convert/model.js';
 import { modelToDocx } from '../services/convert/docx.js';
-import { convertToWordAI } from '../services/convert/aiWordConvert.js';
 import { extractBakedImages, maskExtractedText } from '../services/convert/rasterImages.js';
 import { modelToXlsx } from '../services/convert/xlsx.js';
 import { modelToPptx } from '../services/convert/pptx.js';
@@ -48,17 +47,17 @@ const COMPRESS_LEVELS = [
   { id: 'high', label: 'High', hint: 'Smallest file, still sharp text', scale: 1.5, quality: 0.6 },
 ];
 
-// PDF → Word: the headline modes get large, premium selection cards. Just the
-// title (+ a "Recommended" badge) — no explanatory copy or keyword chips — so the
-// choice stays clean and users pick on the label alone.
-//  • 'layout' — FULLY EDITABLE: real Word paragraphs, tables and lists you click and
-//    type into directly (native reconstruction — no floating boxes, no model download).
-//  • 'ai'     — model-assisted structure detection (downloads a small model first run).
-//  • 'exact'  — pixel-faithful copy; text rides in positioned boxes over the page raster.
+// PDF → Word: two deterministic (no-AI) modes as large, premium selection cards.
+// Just the title (+ a "Recommended" badge) — no explanatory copy — so the choice
+// stays clean and users pick on the label alone.
+//  • 'exact'  — EXACT LAYOUT: looks identical to the PDF. The page (images, graphics,
+//    baked/scanned text) is kept as a background; every real text line, table cell and
+//    number is overlaid as an editable frame pinned at its exact x/y position.
+//  • 'layout' — FULLY EDITABLE: reflows into native Word paragraphs, tables and lists —
+//    easiest for heavy rewriting, but not pixel-positioned.
 const WORD_MODE_CARDS = [
-  { id: 'layout', icon: 'edit', title: 'Fully Editable', recommended: true },
-  { id: 'ai', icon: 'sparkle', title: 'Editable (AI)' },
-  { id: 'exact', icon: 'document', title: 'Exact Copy' },
+  { id: 'exact', icon: 'document', title: 'Exact Layout', recommended: true },
+  { id: 'layout', icon: 'edit', title: 'Fully Editable' },
 ];
 // Power-user modes, tucked into a collapsed "Advanced options" disclosure so the
 // primary choice stays uncluttered. Same wiring/values as the cards.
@@ -145,7 +144,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
   let overlay = null;
   let selectedId = 'compress';
   const settings = {
-    wordMode: 'layout', imgRes: 'screen',
+    wordMode: 'exact', imgRes: 'screen',
     compressMode: 'level', compressLevel: 'recommended',
     compressTargetValue: 0, compressTargetUnit: 'KB',
   };
@@ -359,7 +358,7 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
     const wrap = el('div', { class: 'bpx-exp__wordmode' });
 
     // Advanced modes aren't selectable yet; make sure we never sit on one.
-    if (WORD_MODE_ADVANCED.some((m) => m.id === settings.wordMode)) settings.wordMode = 'layout';
+    if (WORD_MODE_ADVANCED.some((m) => m.id === settings.wordMode)) settings.wordMode = 'exact';
 
     const sync = () => {
       for (const c of wrap.querySelectorAll('.bpx-exp__card')) {
@@ -506,15 +505,13 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
     const scannedMsg = 'No selectable text was found (the PDF may be scanned). Try PDF → JPG/PNG instead, or run OCR first.';
     if (id === 'excel' || id === 'ppt' || id === 'html' || id === 'word') {
       const content = buildContentModel(model, getDocName());
-      // Original-Layout Word and HTML can carry the document's images, so they
+      // Fully-Editable Word and HTML can carry the document's images, so they
       // only need text OR images; the text-first targets need real text.
       // Exact-Layout Word reproduces the page raster verbatim, so it is valid even
       // for a scanned/image-only PDF (nothing is lost — it just isn't editable text).
-      // AI Layout also reads the page raster (the model looks at the image), so it
-      // likewise doesn't require a pre-extracted text layer.
-      const exactWord = id === 'word' && (settings.wordMode === 'exact' || settings.wordMode === 'ai');
+      const exactWord = id === 'word' && settings.wordMode === 'exact';
       // PowerPoint lays each page down as a raster backdrop with the editable text on
-      // top, so — like Exact/AI Word — it reproduces the page verbatim and is valid
+      // top, so — like Exact Word — it reproduces the page verbatim and is valid
       // even for a scanned/image-only PDF (it simply carries no editable text boxes).
       const exactLook = exactWord || id === 'ppt';
       const imagesOk = id === 'html' || (id === 'word' && settings.wordMode === 'layout');
@@ -571,38 +568,20 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
         return;
       }
       if (id === 'word') {
-        // AI Layout: an on-device model detects tables/paragraphs per page and the
-        // PDF's own text fills them → real editable Word tables. Runs in a Worker;
-        // first use downloads the model. Slower, but rebuilds true editable tables.
-        if (settings.wordMode === 'ai') {
-          // Recover the page's baked-in pictures (signature/photo/QR/logo) so the AI
-          // rebuild can place them as real editable images. Best-effort → [] on fail.
-          setWorking('Recovering images…');
-          const extraImages = await extractBakedImages(model);
-          setWorking('Loading AI model…');
-          const blob = await convertToWordAI(model, {
-            name: getDocName(),
-            extraImages,
-            onProgress: (done, total, msg) => setWorking(msg || `Analysing pages… ${done}/${total}`),
-          });
-          setDone({ blob, filename: `${base}.docx` });
-          return;
-        }
-        // Exact Layout reproduces each page 1:1 (raster + editable text boxes at
-        // true positions). We pre-erase the extracted glyphs from the raster so an
-        // overlay box can't let the baked original bleed through in Google Docs.
-        // Best-effort: masking failure just uses the original background.
-        // Exact reproduces each page 1:1 from the raster (which already carries every
-        // picture exactly), so it only needs the text-erased background — NOT recovered
-        // images, which are best-effort and could drop a blank crop over real text.
+        // Exact Layout reproduces each page 1:1 (raster + editable text FRAMES at true
+        // x/y positions). We pre-erase the extracted glyphs from the raster so the
+        // transparent overlay frames can't let the baked original bleed through.
+        // It reproduces each page from the raster (which already carries every picture
+        // exactly), so it only needs the text-erased background — NOT recovered images,
+        // which are best-effort and could drop a blank crop over real text.
         let cleanBg = null;
         if (settings.wordMode === 'exact') {
           setWorking('Preparing pages…');
           cleanBg = await maskExtractedText(model);
         }
-        // The Editable Layout rebuilds vector-side, so the PDF's baked-in images
-        // (photo, signature, QR, logos) must be recovered from the page raster and
-        // placed as real pictures. Best-effort: recovery failure yields no images.
+        // Fully Editable rebuilds vector-side (native paragraphs/tables/lists), so the
+        // PDF's baked-in images (photo, signature, QR, logos) are recovered from the
+        // page raster and placed as real pictures. Best-effort: failure yields none.
         let extraImages = null;
         if (settings.wordMode === 'layout') {
           setWorking('Recovering images…');
