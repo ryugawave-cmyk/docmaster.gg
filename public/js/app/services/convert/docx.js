@@ -24,6 +24,66 @@ const TW = (px) => Math.max(0, Math.round(px * PX_TO_TWIP)); // px → twips
 const EMU = (px) => Math.max(1, Math.round(px * PX_TO_EMU));  // px → EMU
 const SZHP = (px) => Math.max(8, Math.round(px * PX_TO_PT * 2)); // px font → half-points
 
+/* ------------------------------- lists ---------------------------------- */
+
+// Registry of the numbering-list instances used while building ONE document. Each
+// numbered list group gets its OWN numId so it restarts independently (sharing one
+// numId is the classic bug where a second list continues 4,5,6…); bullets share a
+// single numId (they never renumber). Reset per document via resetLists(); read at
+// pack time to emit word/numbering.xml.
+const listReg = { defs: [], last: null, bulletNum: 0, numberNum: 0, nextId: 2 };
+function resetLists() {
+  listReg.defs = []; listReg.last = null;
+  listReg.bulletNum = 0; listReg.numberNum = 0; listReg.nextId = 2;
+}
+/** Ends the current list run so the next numbered item restarts (called when a
+ *  table/image/heading/plain paragraph interrupts a list). */
+function listBreak() { listReg.last = null; }
+
+/** The `<w:numPr>` for one list item, registering a numbering instance on demand.
+ *  numId 1 is the shared bullet list; each contiguous decimal run gets a fresh numId
+ *  so it starts from its own first number. */
+function listNumPr(list) {
+  let numId;
+  if (list.kind === 'number') {
+    const cont = listReg.last && listReg.last.kind === 'number';
+    if (cont && listReg.numberNum) numId = listReg.numberNum;
+    else {
+      numId = listReg.nextId; listReg.nextId += 1; listReg.numberNum = numId;
+      listReg.defs.push({ numId, abstract: 1, start: list.start || 1 });
+    }
+  } else {
+    if (!listReg.bulletNum) { listReg.bulletNum = 1; listReg.defs.push({ numId: 1, abstract: 0 }); }
+    numId = listReg.bulletNum;
+  }
+  listReg.last = { kind: list.kind };
+  return `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr>`;
+}
+
+/** word/numbering.xml: a bullet abstract list (id 0) and a decimal one (id 1), each
+ *  3 levels, plus one `<w:num>` per registered instance. Multiple `<w:num>` may share
+ *  an abstract; each numId numbers independently, so per-group ids restart correctly.
+ *  A start ≠ 1 is applied with a level-0 startOverride. */
+function buildNumberingXml(defs) {
+  const bulletChars = ['•', '◦', '▪']; // • ◦ ▪
+  const lvl = (i, fmt, text) =>
+    `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
+    + `<w:lvlText w:val="${xml(text)}"/><w:lvlJc w:val="left"/>`
+    + `<w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
+  const bulletAbs = '<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>'
+    + [0, 1, 2].map((i) => lvl(i, 'bullet', bulletChars[i])).join('') + '</w:abstractNum>';
+  const decimalAbs = '<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>'
+    + [0, 1, 2].map((i) => lvl(i, 'decimal', `%${i + 1}.`)).join('') + '</w:abstractNum>';
+  const nums = defs.map((d) => {
+    const over = (d.start && d.start !== 1)
+      ? `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="${d.start}"/></w:lvlOverride>` : '';
+    return `<w:num w:numId="${d.numId}"><w:abstractNumId w:val="${d.abstract}"/>${over}</w:num>`;
+  }).join('');
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    + '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    + bulletAbs + decimalAbs + nums + '</w:numbering>';
+}
+
 const DOC_NS = [
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"',
@@ -69,6 +129,7 @@ export function modelToDocx(model, opts = {}) {
     return id;
   };
 
+  resetLists();
   let bodyXml;
   if (mode === 'exact') bodyXml = absoluteBody(content, addImage, opts.cleanBg);
   else if (mode === 'ai') bodyXml = aiBody(content, opts.aiPages || [], addImage, opts.inlineImages);
@@ -79,7 +140,8 @@ export function modelToDocx(model, opts = {}) {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document ${DOC_NS}><w:body>${bodyXml}</w:body></w:document>`;
 
-  return packDocx(documentXml, media, rels);
+  const numbering = listReg.defs.length ? buildNumberingXml(listReg.defs) : null;
+  return packDocx(documentXml, media, rels, [], numbering);
 }
 
 /**
@@ -250,11 +312,13 @@ export function positionedModelToEditableDocx(doc) {
     });
   }
 
+  resetLists();
   const bodyXml = faithfulBody({ pages }, addImage, true);
   const documentXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document ${DOC_NS}><w:body>${bodyXml}</w:body></w:document>`;
-  return packDocx(documentXml, media, rels);
+  const numbering = listReg.defs.length ? buildNumberingXml(listReg.defs) : null;
+  return packDocx(documentXml, media, rels, [], numbering);
 }
 
 /** GZIP a byte array via the platform CompressionStream (browser + Node 18+). */
@@ -410,8 +474,11 @@ function flowBody(content, addImage) {
       out.push('<w:p><w:pPr><w:spacing w:before="240" w:after="120"/><w:keepNext/></w:pPr>' +
         textRuns(b.text, runProps({ bold: true, size: sz, color: '1f2937' })) + '</w:p>');
     } else if (b.type === 'bullet') {
-      out.push('<w:p><w:pPr><w:spacing w:after="80"/><w:ind w:left="360" w:hanging="360"/></w:pPr>' +
-        textRuns('•\t' + b.text, runProps({ size: 22 })) + '</w:p>');
+      // Real, editable Word bullet list (numbering-driven marker + indent) instead of
+      // a literal "•\t" typed into the text.
+      const np = listNumPr({ kind: 'bullet' });
+      out.push('<w:p><w:pPr>' + np + '<w:spacing w:after="80"/></w:pPr>' +
+        textRuns(b.text, runProps({ size: 22 })) + '</w:p>');
     } else {
       out.push('<w:p><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr>' +
         textRuns(b.text, runProps({ size: 22 })) + '</w:p>');
@@ -473,6 +540,7 @@ function faithfulBody(content, addImage, inlineImages = false) {
     for (const b of pg.blocks) {
       if (b.type === 'table') {
         if (lastWasTable) flow.push(TABLE_SEP); // keep adjacent tables from merging
+        listBreak(); // a table ends any running numbered list
         flow.push(tableXml(b, addImage));
         lastWasTable = true;
       } else if (b.type === 'image') {
@@ -480,7 +548,7 @@ function faithfulBody(content, addImage, inlineImages = false) {
         // picture INLINE at its reading-order position so it pushes content down.
         // Floated at absolute PDF coordinates it would overlap the reflowed text,
         // because the flow editor does not preserve the PDF's y positions.
-        if (inlineImages) { flow.push(inlineImagePara(b, addImage, pg.w)); lastWasTable = false; }
+        if (inlineImages) { listBreak(); flow.push(inlineImagePara(b, addImage, pg.w)); lastWasTable = false; }
         else imgBlocks.push(b);
       }
       else { flow.push(styledPara(b, addImage)); lastWasTable = false; }
@@ -500,6 +568,7 @@ function faithfulBody(content, addImage, inlineImages = false) {
       parts.push(`<w:p><w:r>${anchors}</w:r></w:p>`);
     }
     for (const f of flow) parts.push(f);
+    listBreak(); // list numbering never continues across a page/section boundary
     const secW = TW(pg.w), secH = TW(pg.h);
     const sectPr = `<w:sectPr><w:pgSz w:w="${secW}" w:h="${secH}"/>`
       + '<w:pgMar w:top="360" w:right="360" w:bottom="360" w:left="360" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>';
@@ -574,7 +643,6 @@ function styledPara(b, addImage) {
   const jc = b.align === 'center' ? '<w:jc w:val="center"/>'
     : b.align === 'right' ? '<w:jc w:val="right"/>'
       : b.align === 'justify' ? '<w:jc w:val="both"/>' : '';
-  const ind = b.x > 4 && !shading ? `<w:ind w:left="${TW(b.x)}"/>` : '';
   const before = b.type === 'heading' ? 80 : 20;
   const after = b.type === 'heading' ? 40 : 20;
   const rpr = runProps({
@@ -582,6 +650,15 @@ function styledPara(b, addImage) {
     size: SZHP(st.size || 16), color: st.color, font: st.font,
   });
   const body = (b.lines && b.lines.length) ? renderContent(b.lines, rpr, addImage) : textRuns(b.text, rpr);
+  // Real, editable Word list item: `<w:numPr>` drives the marker + indent (no manual
+  // `w:ind`), so numbers renumber and bullets stay bullets when the user edits.
+  if (b.list && b.list.kind) {
+    const np = listNumPr(b.list);
+    return `<w:p><w:pPr>${np}${shading}<w:spacing w:before="0" w:after="${after}"/>${jc}</w:pPr>`
+      + body + '</w:p>';
+  }
+  listBreak(); // a non-list paragraph/heading ends any running numbered list
+  const ind = b.x > 4 && !shading ? `<w:ind w:left="${TW(b.x)}"/>` : '';
   return `<w:p><w:pPr><w:spacing w:before="${before}" w:after="${after}"/>${shading}${jc}${ind}</w:pPr>`
     + body + '</w:p>';
 }
@@ -710,6 +787,7 @@ function aiBody(content, aiPages, addImage, inlineImages = false) {
       // shared table/paragraph builders; the AI-region blocks are converted first.
       if (b && b.kind === 'table') {
         if (lastWasTable) parts.push(TABLE_SEP); // keep adjacent tables from merging
+        listBreak(); // a table ends any running numbered list
         parts.push(tableXml(b.geom ? fitCols(b, innerW) : aiTableToTbl(b, innerW), addImage));
         lastWasTable = true;
       } else if (b && b.kind === 'paragraph') {
@@ -719,6 +797,7 @@ function aiBody(content, aiPages, addImage, inlineImages = false) {
         // Inline, centred picture — sized to fit the printable width with aspect
         // ratio preserved (never enlarged), so it reserves its own vertical space and
         // the following heading/paragraph/table flow below it.
+        listBreak(); // an image ends any running numbered list
         const [dw, dh] = fitImage(b.im, innerW, innerH);
         const rId = addImage(b.im.src);
         const id = drawId++;
@@ -728,6 +807,7 @@ function aiBody(content, aiPages, addImage, inlineImages = false) {
       }
     }
     if (!stream.length && !floatImgs.length) parts.push('<w:p/>');
+    listBreak(); // list numbering never continues across a page/section boundary
 
     const secW = TW(pg.w), secH = TW(pg.h);
     const mar = TW(MPX);
@@ -1121,7 +1201,7 @@ function pictureGraphic(w, h, rId, id) {
 
 /* ------------------------------ packaging -------------------------------- */
 
-function packDocx(documentXml, media, rels, extraParts = []) {
+function packDocx(documentXml, media, rels, extraParts = [], numbering = null) {
   const hasImg = media.length > 0;
   const usesPng = media.some((m) => m.ext === 'png');
   const usesJpg = media.some((m) => m.ext === 'jpg');
@@ -1139,6 +1219,7 @@ function packDocx(documentXml, media, rels, extraParts = []) {
     (usesJpg ? '<Default Extension="jpg" ContentType="image/jpeg"/>' : '') +
     extraDefaults +
     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+    (numbering ? '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>' : '') +
     '</Types>';
 
   const rootRels =
@@ -1153,14 +1234,20 @@ function packDocx(documentXml, media, rels, extraParts = []) {
     { name: 'word/document.xml', data: documentXml },
   ];
 
-  if (hasImg) {
+  // document.xml.rels is needed when there are images AND/OR a numbering part.
+  if (hasImg || numbering) {
+    const numRel = numbering
+      ? '<Relationship Id="rId990" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
+      : '';
     const docRels =
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       rels.map((r) => `<Relationship Id="${r.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${r.target}"/>`).join('') +
+      numRel +
       '</Relationships>';
     entries.push({ name: 'word/_rels/document.xml.rels', data: docRels });
     for (const m of media) entries.push({ name: `word/media/${m.name}`, data: m.bytes });
+    if (numbering) entries.push({ name: 'word/numbering.xml', data: numbering });
   }
   // Non-standard extra parts (our re-import sidecar). Word/LibreOffice ignore parts
   // they don't reference; a Default content type keeps the package OPC-valid.

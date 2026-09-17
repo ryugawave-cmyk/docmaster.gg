@@ -30,7 +30,46 @@
  * @param {{pages:{index:number,w:number,h:number,runs:Run[],images:any[]}[]}} content
  * @returns {{index:number,w:number,h:number,blocks:Block[]}[]}
  */
-import { coalesceLineRuns } from './model.js';
+import { coalesceLineRuns, buildContentModel } from './model.js';
+
+/**
+ * Clean, documented INTERMEDIATE JSON for the whole document — the structural model
+ * that sits between raw PDF geometry and the DOCX writer. One place any consumer
+ * (the Word/HTML/PPT exporters, a test, or an external caller) can read the logical
+ * document without touching pixel coordinates.
+ *
+ * Shape:
+ *   { name, pages:[ { index, width, height, blocks:[ Block ] } ] }
+ * where a Block is one of:
+ *   { type:'heading',   level:1|2|3, text, align, style }
+ *   { type:'paragraph', text, align, style, list?:{kind:'bullet'|'number', start} }
+ *   { type:'table',     cols:number[], rows:Cell[][], left }
+ *   { type:'image',     src, x, y, w, h }
+ * and `style` = { size, bold, italic, color, font, boxBg }.
+ *
+ * @param {object} model editor export model (engine.getExportModel())
+ * @param {string} [name]
+ */
+export function reconstructDocument(model, name) {
+  const content = buildContentModel(model, name);
+  const pages = reconstructPages(content);
+  return {
+    name: content.name || name || 'document',
+    pages: pages.map((pg) => ({
+      index: pg.index,
+      width: pg.w,
+      height: pg.h,
+      blocks: pg.blocks.map(cleanBlock),
+    })),
+  };
+}
+
+/** Strip the internal `_y` ordering key (and other private fields) from a block so
+ *  the exported JSON is a clean, stable structure. */
+function cleanBlock(b) {
+  const { _y, ...rest } = b;
+  return rest;
+}
 
 export function reconstructPages(content) {
   const sizes = [];
@@ -319,7 +358,34 @@ function buildTextBlock(line, bodySize) {
     const level = size >= bodySize * 1.8 ? 1 : size >= bodySize * 1.4 ? 2 : 3;
     return { type: 'heading', text: plain, lines, style, align, level, x };
   }
+  // Bullet / numbered list item — detected from a leading marker, which is stripped so
+  // it isn't duplicated (the DOCX writer re-adds a REAL list marker via numbering). We
+  // drop `lines` here so the styled marker-free `text` is what renders.
+  const li = detectListItem(plain);
+  if (li) {
+    const list = li.kind === 'number' ? { kind: 'number', start: li.start } : { kind: 'bullet' };
+    return { type: 'paragraph', text: li.text, style, align, x, list };
+  }
   return { type: 'paragraph', text: plain, lines, style, align, x };
+}
+
+// Unambiguous bullet glyphs PDFs emit, plus the common dash/asterisk bullets.
+const BULLET_RE = /^\s*([•‣◦▪●○∙·⁃]|[-*–—])\s+(.+)$/;
+// A decimal marker only ("1." / "12)" — never a 4-digit year, letter or roman, which
+// would risk turning ordinary prose into a list or relabelling "a)" as "1.").
+const NUMBER_RE = /^\s*(\d{1,3})[.)]\s+(.+)$/;
+
+/** Classify a line as a list item from its leading marker. Returns the marker KIND
+ *  and the marker-free text, or null when the line isn't a list item. Only decimal
+ *  numbering is treated as a real numbered list; letters/romans stay plain so their
+ *  original marker text is preserved verbatim. */
+export function detectListItem(text) {
+  const t = String(text == null ? '' : text);
+  let m = t.match(BULLET_RE);
+  if (m && m[2].trim()) return { kind: 'bullet', text: m[2].trim() };
+  m = t.match(NUMBER_RE);
+  if (m && m[2].trim()) return { kind: 'number', start: Math.max(1, parseInt(m[1], 10) || 1), text: m[2].trim() };
+  return null;
 }
 
 const styleOf = (r) => ({

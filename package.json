@@ -18,6 +18,7 @@
     "verify:delete": "node scripts/verify-delete.js",
     "verify:docx-formatting": "node scripts/verify-docx-formatting.mjs",
     "verify:docx-highlight": "node scripts/verify-docx-highlight.mjs",
+    "verify:docx-lists": "node scripts/verify-docx-lists.mjs",
     "verify:docx-roundtrip-layout": "node scripts/verify-docx-roundtrip-layout.mjs",
     "verify:font-weight": "node scripts/verify-font-weight.mjs",
     "verify:graphic-regions": "node scripts/verify-graphic-regions.mjs",
@@ -27,7 +28,7 @@
     "verify:posbox-width": "node scripts/verify-posbox-width.mjs",
     "verify:positioned-docx": "node scripts/verify-positioned-docx.mjs",
     "verify:positioned-roundtrip": "node scripts/verify-positioned-roundtrip.mjs",
-    "test": "node scripts/verify-font-weight.mjs && node scripts/verify-graphic-regions.mjs && node scripts/verify-posbox-click.mjs && node scripts/verify-posbox-fit.mjs && node scripts/verify-positioned-docx.mjs && node scripts/verify-delete.js"
+    "test": "node scripts/verify-docx-lists.mjs && node scripts/verify-font-weight.mjs && node scripts/verify-graphic-regions.mjs && node scripts/verify-posbox-click.mjs && node scripts/verify-posbox-fit.mjs && node scripts/verify-positioned-docx.mjs && node scripts/verify-delete.js"
   },
   "keywords": [
     "docmaster",
