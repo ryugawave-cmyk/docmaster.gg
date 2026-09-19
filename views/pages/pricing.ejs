@@ -1,62 +1,129 @@
-<section class="page-hero">
-  <div class="container">
-    <span class="eyebrow eyebrow--center">Pricing</span>
-    <h1 class="page-hero__title">Free to use today</h1>
-    <p class="page-hero__lead">
-      Every tool on <%= site.name %> is currently free while the platform is in active development.
-      Paid plans below are planned for the future — they are not available yet.
+<%
+// ============================================================
+//  Pricing — premium dark plans layout (matches the design ref).
+//  Styling: public/css/pricing.css (loaded only on "/pricing").
+// ============================================================
+const hi = {
+  bolt:   '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/>',
+  lock:   '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  cloud:  '<path d="M17.5 19a4.5 4.5 0 0 0 .5-8.98A6 6 0 0 0 6.2 9.2 4 4 0 0 0 7 19Z"/>',
+  cube:   '<path d="M21 8 12 3 3 8v8l9 5 9-5Z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  crown:  '<path d="M3 7l4 4 5-6 5 6 4-4-2 12H5L3 7Z"/><path d="M5 19h14"/>',
+  users:  '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  bell:   '<path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.5 20a2 2 0 0 0 3 0"/>',
+  arrow:  '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+function ic(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (hi[name] || hi.cube) + '</svg>';
+}
+const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+%>
+
+<section class="pp">
+  <div class="pp__aura pp__aura--1" aria-hidden="true"></div>
+  <div class="pp__aura pp__aura--2" aria-hidden="true"></div>
+
+  <!-- ===== Header ===== -->
+  <div class="container pp__head">
+    <span class="pp__badge">Pricing</span>
+    <h1 class="pp__title">Simple Plans for<br><span class="grad">Every Creator</span></h1>
+    <p class="pp__lead">
+      Powerful document tools, ready in your browser. Start free and upgrade
+      when you need more.
     </p>
+
+    <ul class="pp__highlights">
+      <li>
+        <span class="pp__hi-ico"><%- ic('bolt') %></span>
+        <span><strong>No installation</strong><small>Works in your browser</small></span>
+      </li>
+      <li>
+        <span class="pp__hi-ico"><%- ic('lock') %></span>
+        <span><strong>Your files stay private</strong><small>Never uploaded to our servers</small></span>
+      </li>
+      <li>
+        <span class="pp__hi-ico"><%- ic('cloud') %></span>
+        <span><strong>All-in-one tools</strong><small>PDF, DOC, Excel, and more</small></span>
+      </li>
+    </ul>
   </div>
-</section>
 
-<section class="section">
+  <!-- ===== Plans ===== -->
+  <div class="container pp__grid">
+    <!-- Free -->
+    <article class="plan">
+      <span class="plan__ico"><%- ic('cube') %></span>
+      <h2 class="plan__name">Free</h2>
+      <p class="plan__tag">Get started with all essential tools.</p>
+      <p class="plan__price"><span class="plan__amount">$0</span><span class="plan__per">Forever free</span></p>
+      <hr class="plan__rule" />
+      <ul class="plan__feat">
+        <li><span class="check"><%- checkSvg %></span> All current PDF tools</li>
+        <li><span class="check"><%- checkSvg %></span> Document editor with tables, images and charts</li>
+        <li><span class="check"><%- checkSvg %></span> Convert &amp; export (PDF, Word, HTML, Excel, images)</li>
+        <li><span class="check"><%- checkSvg %></span> Files processed privately in your browser</li>
+        <li><span class="check"><%- checkSvg %></span> No account required</li>
+      </ul>
+      <a href="/workspace" class="plan__btn plan__btn--outline">Start using now <%- ic('arrow') %></a>
+    </article>
+
+    <!-- Pro (featured) -->
+    <article class="plan plan--featured">
+      <span class="plan__ribbon">Most Popular</span>
+      <span class="plan__ico plan__ico--accent"><%- ic('crown') %></span>
+      <h2 class="plan__name">Pro</h2>
+      <p class="plan__tag">More power for heavy users.</p>
+      <p class="plan__soon grad">Coming soon</p>
+      <p class="plan__soon-sub">Advanced features are in development.</p>
+      <hr class="plan__rule" />
+      <ul class="plan__feat">
+        <li><span class="check"><%- checkSvg %></span> Larger and batch processing</li>
+        <li><span class="check"><%- checkSvg %></span> Expanded on-device tools</li>
+        <li><span class="check"><%- checkSvg %></span> Higher file size limits</li>
+        <li><span class="check"><%- checkSvg %></span> Priority support</li>
+        <li><span class="check"><%- checkSvg %></span> Early access to new features</li>
+      </ul>
+      <a href="/contact" class="plan__btn plan__btn--grad"><%- ic('bell') %> Notify me</a>
+    </article>
+
+    <!-- Team -->
+    <article class="plan">
+      <span class="plan__ico"><%- ic('users') %></span>
+      <h2 class="plan__name">Team</h2>
+      <p class="plan__tag">For groups who work together.</p>
+      <p class="plan__soon grad">Coming soon</p>
+      <p class="plan__soon-sub">Collaboration features are on the way.</p>
+      <hr class="plan__rule" />
+      <ul class="plan__feat">
+        <li><span class="check"><%- checkSvg %></span> Everything in Pro</li>
+        <li><span class="check"><%- checkSvg %></span> Shared workflows</li>
+        <li><span class="check"><%- checkSvg %></span> Team collaboration</li>
+        <li><span class="check"><%- checkSvg %></span> Admin options</li>
+        <li><span class="check"><%- checkSvg %></span> Priority support</li>
+      </ul>
+      <a href="/contact" class="plan__btn plan__btn--outline"><%- ic('users') %> Join the waitlist</a>
+    </article>
+  </div>
+
+  <!-- ===== Reassurance band ===== -->
   <div class="container">
-    <div class="pricing-grid">
-      <article class="price-card price-card--featured">
-        <div class="price-card__badge">Available now</div>
-        <h2 class="price-card__name">Free</h2>
-        <p class="price-card__price"><span>$0</span></p>
-        <p class="price-card__desc">Everything the platform offers today.</p>
-        <ul class="price-card__features">
-          <li>All current PDF tools</li>
-          <li>Document editor with tables, images and charts</li>
-          <li>Convert &amp; export (PDF, Word, HTML, Excel, images)</li>
-          <li>Files processed privately in your browser</li>
-          <li>No account required</li>
-        </ul>
-        <a href="/workspace" class="btn btn-primary btn-block">Open the editor</a>
-      </article>
-
-      <article class="price-card">
-        <div class="price-card__badge price-card__badge--soon">Planned</div>
-        <h2 class="price-card__name">Pro</h2>
-        <p class="price-card__price price-card__price--soon"><span>Coming soon</span></p>
-        <p class="price-card__desc">Ideas we’re exploring for power users.</p>
-        <ul class="price-card__features">
-          <li>Larger and batch processing</li>
-          <li>Expanded on-device tools</li>
-          <li>Priority support</li>
-        </ul>
-        <a href="/contact" class="btn btn-outline btn-block">Get notified</a>
-      </article>
-
-      <article class="price-card">
-        <div class="price-card__badge price-card__badge--soon">Planned</div>
-        <h2 class="price-card__name">Team</h2>
-        <p class="price-card__price price-card__price--soon"><span>Coming soon</span></p>
-        <p class="price-card__desc">For groups who work together.</p>
-        <ul class="price-card__features">
-          <li>Everything planned for Pro</li>
-          <li>Shared workflows</li>
-          <li>Admin options</li>
-        </ul>
-        <a href="/contact" class="btn btn-outline btn-block">Contact us</a>
-      </article>
+    <div class="pp__band">
+      <div class="pp__band-item">
+        <span class="pp__band-ico"><%- ic('shield') %></span>
+        <span><strong>Your privacy, our priority</strong><small>Your files are processed in your browser — never uploaded to our servers.</small></span>
+      </div>
+      <div class="pp__band-item">
+        <span class="pp__band-ico"><%- ic('bolt') %></span>
+        <span><strong>Fast and simple</strong><small>Start working instantly. No installation, no complicated setup.</small></span>
+      </div>
+      <div class="pp__band-item">
+        <span class="pp__band-ico"><%- ic('users') %></span>
+        <span><strong>Built for everyone</strong><small>Students, professionals, and teams — all in one place.</small></span>
+      </div>
     </div>
 
-    <p class="pricing-note">
-      Pricing and Pro/Team features are indicative and not yet available. Have a suggestion?
-      <a href="/contact">Tell us what you’d find useful.</a>
-    </p>
+    <p class="pp__note">Pricing and Pro/Team features are indicative and not yet available.</p>
+    <p class="pp__ask">Have a suggestion? <a href="/contact">Tell us what you’d find useful. <%- ic('arrow') %></a></p>
   </div>
 </section>
