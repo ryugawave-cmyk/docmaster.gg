@@ -59,6 +59,10 @@
 <link rel="stylesheet" href="/css/style.css?v=<%= assetVersion %>" />
 <link rel="stylesheet" href="/css/pages.css?v=<%= assetVersion %>" />
 <link rel="stylesheet" href="/css/auth.css?v=<%= assetVersion %>" />
+<% if (currentPath === '/tools') { %>
+<!-- Premium dark Tools index theme — loaded last so it wins, only on "/tools". -->
+<link rel="stylesheet" href="/css/tools.css?v=<%= assetVersion %>" />
+<% } %>
 
 <!-- Structured data (nonce-tagged so the strict CSP allows it) -->
 <script type="application/ld+json" nonce="<%= nonce %>">

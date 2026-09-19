@@ -5,6 +5,19 @@
         <%- include('./brand') %>
         <p class="footer-tagline"><%= site.tagline %></p>
         <p class="footer-privacy-note">Your files are processed in your browser — never uploaded to our servers.</p>
+        <% if (currentPath === '/tools') { %>
+        <div class="footer-social" aria-label="Social links">
+          <a href="mailto:<%= site.contactEmail %>" aria-label="Email us">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+          </a>
+          <a href="/contact" aria-label="Contact">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2Z"/></svg>
+          </a>
+          <a href="/security" aria-label="Security">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+          </a>
+        </div>
+        <% } %>
       </div>
 
       <div class="footer-col">
