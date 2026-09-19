@@ -33,20 +33,12 @@ const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
       when you need more.
     </p>
 
-    <ul class="pp__highlights">
-      <li>
-        <span class="pp__hi-ico"><%- ic('bolt') %></span>
-        <span><strong>No installation</strong><small>Works in your browser</small></span>
-      </li>
-      <li>
-        <span class="pp__hi-ico"><%- ic('lock') %></span>
-        <span><strong>Your files stay private</strong><small>Never uploaded to our servers</small></span>
-      </li>
-      <li>
-        <span class="pp__hi-ico"><%- ic('cloud') %></span>
-        <span><strong>All-in-one tools</strong><small>PDF, DOC, Excel, and more</small></span>
-      </li>
-    </ul>
+    <div class="billing" role="group" aria-label="Billing period">
+      <input type="radio" name="billing" id="bill-monthly" class="billing__radio" checked>
+      <label for="bill-monthly" class="billing__opt">Monthly</label>
+      <input type="radio" name="billing" id="bill-yearly" class="billing__radio">
+      <label for="bill-yearly" class="billing__opt">Yearly <span class="billing__save">Save 20%</span></label>
+    </div>
   </div>
 
   <!-- ===== Plans ===== -->
@@ -106,24 +98,4 @@ const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
     </article>
   </div>
 
-  <!-- ===== Reassurance band ===== -->
-  <div class="container">
-    <div class="pp__band">
-      <div class="pp__band-item">
-        <span class="pp__band-ico"><%- ic('shield') %></span>
-        <span><strong>Your privacy, our priority</strong><small>Your files are processed in your browser — never uploaded to our servers.</small></span>
-      </div>
-      <div class="pp__band-item">
-        <span class="pp__band-ico"><%- ic('bolt') %></span>
-        <span><strong>Fast and simple</strong><small>Start working instantly. No installation, no complicated setup.</small></span>
-      </div>
-      <div class="pp__band-item">
-        <span class="pp__band-ico"><%- ic('users') %></span>
-        <span><strong>Built for everyone</strong><small>Students, professionals, and teams — all in one place.</small></span>
-      </div>
-    </div>
-
-    <p class="pp__note">Pricing and Pro/Team features are indicative and not yet available.</p>
-    <p class="pp__ask">Have a suggestion? <a href="/contact">Tell us what you’d find useful. <%- ic('arrow') %></a></p>
-  </div>
 </section>
