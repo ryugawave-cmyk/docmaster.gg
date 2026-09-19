@@ -61,45 +61,75 @@
     }
   }
 
-  /* ----- Contact form → compose email --------------------------------- */
-  // No backend inbox exists, so the form opens the visitor's email client with
-  // their message pre-filled and addressed to our support inbox. This is a real,
-  // working contact path with no server-side data collection.
+  /* ----- Contact form → POST to /api/contact -------------------------- */
+  // The form submits to our own endpoint, which stores the message and (if a mail
+  // provider is configured) forwards it to the support inbox. If the request fails
+  // we fall back to opening the visitor's email client (mailto) so the message is
+  // never lost.
   const form = document.querySelector('[data-contact-form]');
   const note = document.querySelector('[data-form-note]');
   if (form) {
+    const get = function (name) {
+      const el = form.elements[name];
+      return el ? String(el.value || '').trim() : '';
+    };
+    const setNote = function (msg, isError) {
+      if (!note) return;
+      note.hidden = false;
+      note.textContent = msg;
+      note.classList.toggle('is-error', !!isError);
+    };
+    const mailtoFallback = function (reason, name, email, message) {
+      const to = form.getAttribute('data-contact-email') || '';
+      const subject = '[Advance Office Doc] ' + reason;
+      const body = 'Name: ' + name + '\nEmail: ' + email + '\nReason: ' + reason + '\n\n' + message + '\n';
+      window.location.href = 'mailto:' + encodeURIComponent(to) +
+        '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    };
+
+    // Live character counter for the message field (premium contact form).
+    const messageEl = form.elements['message'];
+    const countEl = form.querySelector('[data-char-count]');
+    if (messageEl && countEl) {
+      const updateCount = function () { countEl.textContent = String((messageEl.value || '').length); };
+      messageEl.addEventListener('input', updateCount);
+      form.addEventListener('reset', function () { window.setTimeout(updateCount, 0); });
+      updateCount();
+    }
+
     form.addEventListener('submit', function (event) {
       event.preventDefault();
-      if (!form.checkValidity()) {
-        form.reportValidity();
-        return;
-      }
+      if (!form.checkValidity()) { form.reportValidity(); return; }
 
-      const to = form.getAttribute('data-contact-email') || '';
-      const get = function (name) {
-        const el = form.elements[name];
-        return el ? String(el.value || '').trim() : '';
-      };
-
-      const reason = get('reason') || 'Message';
+      const reason = get('reason') || 'General question';
       const name = get('name');
       const email = get('email');
       const message = get('message');
+      const company = get('company'); // honeypot (hidden)
 
-      const subject = '[Advance Office Doc] ' + reason;
-      const body =
-        'Name: ' + name + '\n' +
-        'Email: ' + email + '\n' +
-        'Reason: ' + reason + '\n\n' +
-        message + '\n';
+      const btn = form.querySelector('button[type="submit"]');
+      if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = 'Sending…'; }
+      setNote('Sending your message…', false);
 
-      const href =
-        'mailto:' + encodeURIComponent(to) +
-        '?subject=' + encodeURIComponent(subject) +
-        '&body=' + encodeURIComponent(body);
-
-      if (note) note.hidden = false;
-      window.location.href = href;
+      fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, email: email, reason: reason, message: message, company: company }),
+      })
+        .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+        .then(function (r) {
+          if (!r.ok) throw new Error((r.data && r.data.error) || 'Request failed.');
+          setNote('Thanks! Your message has been sent — we’ll get back to you soon.', false);
+          form.reset();
+        })
+        .catch(function () {
+          // Network / server problem → don't lose the message: open their mail app.
+          setNote('We couldn’t send it here — opening your email app instead…', true);
+          mailtoFallback(reason, name, email, message);
+        })
+        .finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || 'Send message'; }
+        });
     });
   }
 })();
