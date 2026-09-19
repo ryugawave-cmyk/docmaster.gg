@@ -67,6 +67,10 @@
 <!-- Premium dark Pricing theme — loaded last so it wins, only on "/pricing". -->
 <link rel="stylesheet" href="/css/pricing.css?v=<%= assetVersion %>" />
 <% } %>
+<% if (currentPath === '/about') { %>
+<!-- Premium dark About theme — loaded last so it wins, only on "/about". -->
+<link rel="stylesheet" href="/css/about.css?v=<%= assetVersion %>" />
+<% } %>
 
 <!-- Structured data (nonce-tagged so the strict CSP allows it) -->
 <script type="application/ld+json" nonce="<%= nonce %>">

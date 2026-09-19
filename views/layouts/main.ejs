@@ -4,7 +4,7 @@
   <%- include('../partials/head') %>
   <%- style %>
 </head>
-<body class="<%= currentPath === '/' ? 'page-home' : (currentPath === '/tools' ? 'page-tools' : (currentPath === '/pricing' ? 'page-pricing' : '')) %>">
+<body class="<%= currentPath === '/' ? 'page-home' : (currentPath === '/tools' ? 'page-tools' : (currentPath === '/pricing' ? 'page-pricing' : (currentPath === '/about' ? 'page-about' : ''))) %>">
   <a class="skip-link" href="#main">Skip to content</a>
 
   <%- include('../partials/header') %>
