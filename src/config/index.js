@@ -44,6 +44,34 @@ const config = {
     ogImage: '/images/picture-web.jpg',
   },
 
+  // AI Assistant proxy (LOCAL TESTING). The key is read here, server-side only,
+  // and is exposed to the rest of the app via this config object — never sent to
+  // the browser. The client talks to the same-origin /api/ai/chat route instead.
+  // `enabled` is derived: the feature only turns on when a key is present.
+  ai: {
+    provider: (process.env.AI_PROVIDER || 'gemini').toLowerCase(),
+    model: process.env.AI_MODEL || '',
+    apiKey: process.env.AI_API_KEY || '',
+    get enabled() { return Boolean(this.apiKey); },
+  },
+
+  // Contact form backend. Submissions are always stored durably (a local JSONL
+  // file in dev; Cloudflare KV in the Worker) and — if an email provider key is
+  // set — also forwarded to the owner's inbox.
+  //   • WEB3FORMS_KEY  — easiest: a free key from web3forms.com, emails `to`
+  //                      directly (no domain/DNS needed). Works local + Worker.
+  //   • RESEND_API_KEY — alternative (needs a verified from-domain on Resend).
+  // `to` is where messages are delivered/labelled (defaults to the support inbox).
+  contact: {
+    to: process.env.CONTACT_TO || 'bloodpath9089@gmail.com',
+    web3formsKey: process.env.WEB3FORMS_KEY || '',
+    resendApiKey: process.env.RESEND_API_KEY || '',
+    resendFrom: process.env.RESEND_FROM || 'Advance Office Doc <onboarding@resend.dev>',
+    // Token to view the stored-messages inbox from a NON-local machine. On
+    // localhost the inbox is open (your own dev box); remotely it needs ?token=.
+    adminToken: process.env.CONTACT_ADMIN_TOKEN || '',
+  },
+
   // Feature flags.
   features: {
     // Cookie-consent banner. OFF by default because the app currently sets no

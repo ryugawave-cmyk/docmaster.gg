@@ -39,3 +39,6 @@ r2-manifest.json
 
 # Vendored on-device OCR engine (large binaries; reproduce with `npm run vendor:ocr`)
 public/vendor/tesseract/
+
+# Contact form submissions (PII) — never commit
+data/

@@ -3592,6 +3592,172 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     emitSelection();
   }
 
+  /** Insert model blocks (paragraphs/headings/etc.) at the caret as ONE undoable
+   *  edit — used by the AI Assistant to write generated content into the page while
+   *  keeping the rest of the document and the undo history intact (unlike load()). */
+  function insertBlocks(blocks) {
+    if (!blocks || !blocks.length) return null;
+    const els = renderBlocks({ blocks });
+    const sel = window.getSelection();
+    const live = sel && sel.rangeCount && editRoot.contains(sel.focusNode) ? blockOf(sel.focusNode) : null;
+    let ref = live
+      || (lastCaretBlock && editRoot.contains(lastCaretBlock) ? lastCaretBlock : null)
+      || visibleAnchorBlock();
+    // If the caret sits on a still-empty paragraph, replace it rather than leaving a
+    // blank line above the inserted content (matches "write into a fresh doc").
+    const dropRef = ref && /^(P|H1|H2|H3)$/.test(ref.tagName) && !ref.textContent.trim() ? ref : null;
+    for (const elx of els) { if (ref) { ref.after(elx); ref = elx; } else { editRoot.appendChild(elx); ref = elx; } }
+    if (dropRef && dropRef.parentNode && dropRef !== els[0]) dropRef.remove();
+    ensureTrailingParagraph();
+    const last = els[els.length - 1];
+    const r = document.createRange();
+    r.selectNodeContents(last); r.collapse(false);
+    sel?.removeAllRanges(); sel?.addRange(r);
+    commit();
+    // A large insert may change heights once web fonts / any images settle — re-flow
+    // then too so a long article paginates onto the right number of pages.
+    repaginateWhenSettled();
+    emitSelection();
+    return els; // caller keeps this so a later "make it shorter" can replace it
+  }
+
+  /** Replace an existing set of block elements with freshly-rendered model blocks as
+   *  ONE undoable edit — the "conversational refine" primitive: the AI Assistant
+   *  keeps a handle to the blocks it last wrote and swaps them in place when the
+   *  user asks to shorten/expand/rewrite/etc. Returns the new elements (or null). */
+  function replaceBlocks(oldEls, blocks) {
+    const targets = (oldEls || []).filter((n) => n && editRoot.contains(n));
+    if (!targets.length || !blocks || !blocks.length) return null;
+    const els = renderBlocks({ blocks });
+    let ref = null;
+    for (const elx of els) { if (!ref) { targets[0].before(elx); ref = elx; } else { ref.after(elx); ref = elx; } }
+    for (const t of targets) t.remove();
+    ensureTrailingParagraph();
+    const last = els[els.length - 1];
+    const r = document.createRange();
+    r.selectNodeContents(last); r.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges(); sel?.addRange(r);
+    commit();
+    repaginateWhenSettled();
+    emitSelection();
+    return els;
+  }
+
+  /** Replace the current selection with model blocks as ONE undoable edit. A single
+   *  block replaces inline (keeps the surrounding text + formatting of the reply);
+   *  multiple blocks split the paragraph and drop real paragraphs in between. Used
+   *  by the AI Assistant's in-place "edit the selected text" flow. Returns the
+   *  affected block element(s) on success, or null if there's no usable selection —
+   *  the caller keeps them so a follow-up "make it smaller" refines the SAME part. */
+  function replaceSelectionWithBlocks(blocks) {
+    if (!blocks || !blocks.length) return null;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed || !editRoot.contains(range.commonAncestorContainer)) return null;
+    editRoot.focus();
+
+    if (blocks.length === 1) {
+      // Inline: drop the reply's run nodes in place of the selection (keeps the rest
+      // of the paragraph, and any bold/italic the reply carried).
+      range.deleteContents();
+      const rendered = renderBlocks({ blocks })[0];
+      const frag = document.createDocumentFragment();
+      while (rendered.firstChild) frag.appendChild(rendered.firstChild);
+      const lastNode = frag.lastChild;
+      range.insertNode(frag);
+      const r = document.createRange();
+      if (lastNode) r.setStartAfter(lastNode); else { r.setStart(range.endContainer, range.endOffset); }
+      r.collapse(true);
+      sel.removeAllRanges(); sel.addRange(r);
+      commit(); emitSelection();
+      const host = blockOf(lastNode || range.startContainer);
+      return host ? [host] : [];
+    }
+
+    // Multi-paragraph: delete the selection, split the start block, and insert the
+    // new blocks between the two halves.
+    range.deleteContents();
+    const startBlock = blockOf(range.startContainer) || visibleAnchorBlock();
+    let afterBlock = null;
+    if (startBlock) {
+      const tail = document.createRange();
+      tail.setStart(range.startContainer, range.startOffset);
+      tail.setEnd(startBlock, startBlock.childNodes.length);
+      const frag = tail.extractContents();
+      if (frag && frag.textContent.trim()) {
+        afterBlock = document.createElement(/^H[1-3]$/.test(startBlock.tagName) ? 'p' : startBlock.tagName);
+        afterBlock.className = 'doc-block';
+        afterBlock.appendChild(frag);
+      }
+    }
+    const els = renderBlocks({ blocks });
+    let ref = startBlock;
+    for (const elx of els) { if (ref) { ref.after(elx); ref = elx; } else { editRoot.appendChild(elx); ref = elx; } }
+    if (afterBlock) ref.after(afterBlock);
+    if (startBlock && !startBlock.textContent.trim()) startBlock.remove();
+    ensureTrailingParagraph();
+    const r = document.createRange();
+    r.selectNodeContents(els[els.length - 1]); r.collapse(false);
+    sel.removeAllRanges(); sel.addRange(r);
+    commit(); emitSelection();
+    return els;
+  }
+
+  /** The real top-level content blocks, in reading order — excludes pagination
+   *  spacers (`.doc-pagebreak`) and floating images (`.is-floating`). The AI agent
+   *  uses this to locate a section by its heading text. */
+  function getBlockEls() {
+    return Array.from(editRoot.children).filter((n) =>
+      !n.classList.contains('doc-pagebreak') && !n.classList.contains('is-floating'));
+  }
+
+  /** Remove a set of block elements as ONE undoable edit (the agent's
+   *  delete_section). Keeps a trailing editable paragraph and re-paginates. */
+  function removeBlocks(els) {
+    const targets = (els || []).filter((n) => n && editRoot.contains(n));
+    if (!targets.length) return false;
+    for (const t of targets) t.remove();
+    if (!getBlockEls().length) {
+      const p = document.createElement('p');
+      p.className = 'doc-block';
+      p.appendChild(document.createElement('br'));
+      editRoot.appendChild(p);
+    }
+    ensureTrailingParagraph();
+    commit();
+    repaginateWhenSettled();
+    emitSelection();
+    return true;
+  }
+
+  /** Insert freshly-rendered model blocks before/after a reference block element as
+   *  ONE undoable edit (the agent's insert_before / insert_after). Falls back to a
+   *  caret insert when the reference is gone. Returns the new elements. */
+  function insertBlocksRelative(blocks, refEl, where = 'after') {
+    if (!blocks || !blocks.length) return null;
+    if (!refEl || !editRoot.contains(refEl)) return insertBlocks(blocks);
+    const els = renderBlocks({ blocks });
+    if (where === 'before') {
+      let ref = null;
+      for (const elx of els) { if (!ref) { refEl.before(elx); ref = elx; } else { ref.after(elx); ref = elx; } }
+    } else {
+      let ref = refEl;
+      for (const elx of els) { ref.after(elx); ref = elx; }
+    }
+    ensureTrailingParagraph();
+    const last = els[els.length - 1];
+    const r = document.createRange();
+    r.selectNodeContents(last); r.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges(); sel?.addRange(r);
+    commit();
+    repaginateWhenSettled();
+    emitSelection();
+    return els;
+  }
+
   /** The top-level content block the user is currently looking at — the first one
    *  reaching into the scroll viewport. Used so an insert with no caret still
    *  lands on the visible page, not at the far end of a long document. */
@@ -3838,6 +4004,12 @@ export function createDocumentEditor({ container, onChange, onSelection, onPagin
     editFooter,
     insertField,
     insertText,
+    insertBlocks,
+    replaceBlocks,
+    replaceSelectionWithBlocks,
+    getBlockEls,
+    removeBlocks,
+    insertBlocksRelative,
     restoreCaret,
     getHfSettings,
     setHfSettings,

@@ -75,6 +75,22 @@
 <!-- Premium dark Contact theme — loaded last so it wins, only on "/contact". -->
 <link rel="stylesheet" href="/css/contact.css?v=<%= assetVersion %>" />
 <% } %>
+<% if (currentPath === '/security') { %>
+<!-- Premium dark Security theme — loaded last so it wins, only on "/security". -->
+<link rel="stylesheet" href="/css/security.css?v=<%= assetVersion %>" />
+<% } %>
+<% if (currentPath === '/privacy') { %>
+<!-- Premium dark Privacy theme — loaded last so it wins, only on "/privacy". -->
+<link rel="stylesheet" href="/css/privacy.css?v=<%= assetVersion %>" />
+<% } %>
+<% if (currentPath === '/cookies') { %>
+<!-- Premium dark Cookie theme — loaded last so it wins, only on "/cookies". -->
+<link rel="stylesheet" href="/css/cookies.css?v=<%= assetVersion %>" />
+<% } %>
+<% if (currentPath === '/terms') { %>
+<!-- Premium dark Terms theme (crimson accent) — loaded last, only on "/terms". -->
+<link rel="stylesheet" href="/css/terms.css?v=<%= assetVersion %>" />
+<% } %>
 
 <!-- Structured data (nonce-tagged so the strict CSP allows it) -->
 <script type="application/ld+json" nonce="<%= nonce %>">
@@ -106,3 +122,10 @@
   ]
 }
 </script>
+
+<!-- Per-page structured data (e.g. tool pages: SoftwareApplication, FAQPage,
+     HowTo, BreadcrumbList). '<' is escaped so a stray "</script>" in copy can
+     never break out of the tag. -->
+<% if (typeof jsonLd !== 'undefined' && jsonLd) { %>
+<script type="application/ld+json" nonce="<%= nonce %>"><%- JSON.stringify(jsonLd).replace(/</g, '\\u003c') %></script>
+<% } %>

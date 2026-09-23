@@ -87,11 +87,12 @@ export function createBlankEditorShell({ container, bus }) {
       el('button', { class: 'bpx-tab-add', type: 'button', 'aria-label': 'New tab', html: renderIcon('plus'), onClick: () => bus.emit('toast', 'Multiple documents — coming soon.') }),
     ]),
     el('div', { class: 'bpx-top__right' }, [
-      // "Transfer" — the headline handoff: convert this PDF to an editable document
-      // and open it in the Document editor. Given a distinct glowing style so it
-      // reads as a primary feature, not a hidden menu item.
-      el('button', { class: 'bpx-transfer', type: 'button', title: 'Transfer this PDF into the Document editor as an editable document', onClick: () => transferToDoc() },
-        [el('span', { class: 'bpx-transfer__ico', html: renderIcon('document') }), 'Transfer to Doc']),
+      // "Transfer to Doc" (PDF → Document editor handoff) is DISABLED in production:
+      // the conversion still has known layout/fidelity issues. The transferToDoc()
+      // implementation below is kept intact so this can be re-enabled once fixed —
+      // just restore the button element here.
+      // el('button', { class: 'bpx-transfer', type: 'button', title: 'Transfer this PDF into the Document editor as an editable document', onClick: () => transferToDoc() },
+      //   [el('span', { class: 'bpx-transfer__ico', html: renderIcon('document') }), 'Transfer to Doc']),
       el('button', { class: 'bpx-import', type: 'button', title: 'Import a PDF to edit', onClick: () => bus.emit('nav:command', { command: 'open', arg: 'pdf' }) },
         [el('span', { html: renderIcon('upload') }), 'Import PDF']),
       iconBtn('help', 'Help', () => bus.emit('toast', 'Help center — coming soon.')),

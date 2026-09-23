@@ -18,6 +18,8 @@ const ASSET_VERSION = process.env.ASSET_VERSION || String(Date.now());
  */
 module.exports = function locals(req, res, next) {
   res.locals.site = config.site;
+  // Where the contact form's mailto fallback should address (the real inbox).
+  res.locals.contactTo = config.contact.to;
   res.locals.features = config.features;
   res.locals.navigation = config.navigation;
   res.locals.footerLinks = config.footerLinks;

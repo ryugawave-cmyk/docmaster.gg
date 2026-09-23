@@ -859,69 +859,191 @@
 }
 
 
-/* Compact floating chat bar (Gemini-style pill) at the bottom-centre of the editor.
-   Default closed; toggled by the AI Assistant button. A small popover with the
-   conversation + quick actions appears ABOVE the bar only while focused or once a
-   conversation exists — so at rest it's just the little bar, not a full panel. */
-.doc-ai-dock {
-  position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 9;
-  width: min(620px, calc(100% - 40px));
-  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+/* ---- AI Assistant button (gradient-glow pill) + bottom docked search bar ---- */
+.doc-ai-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 14px;
+  border: 1.5px solid transparent; border-radius: 999px;
+  /* Two-layer background: solid fill (padding-box) inside a gradient border. */
+  background:
+    linear-gradient(var(--ws-surface, #fff), var(--ws-surface, #fff)) padding-box,
+    linear-gradient(100deg, #22d3ee, #6366f1, #a855f7, #ec4899) border-box;
+  background-size: 100% 100%, 260% 100%;
+  color: var(--ws-text); cursor: pointer; font: inherit;
+  box-shadow: 0 0 0 rgba(139, 92, 246, 0); transition: box-shadow .2s ease;
+  animation: doc-ai-flow 8s linear infinite;
 }
+.doc-ai-btn__ico { display: inline-flex; }
+.doc-ai-btn__ico .ws-icon { width: 16px; height: 16px; }
+.doc-ai-btn__ico { color: #a855f7; }
+.doc-ai-btn__txt {
+  font-size: 13px; font-weight: 700;
+  background: linear-gradient(100deg, #22d3ee, #6366f1, #a855f7, #ec4899);
+  background-size: 260% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+  animation: doc-ai-flow 8s linear infinite;
+}
+.doc-ai-btn:hover, .doc-ai-btn.is-on { box-shadow: 0 0 16px color-mix(in srgb, #a855f7 42%, transparent); }
+@keyframes doc-ai-flow { to { background-position: 260% 0, 260% 0; } }
+@media (prefers-reduced-motion: reduce) { .doc-ai-btn, .doc-ai-btn__txt { animation: none; } }
+
+/* ---- AI Assistant: docked right SIDEBAR (conversation + tools) that resizes the
+   document, plus a floating bottom PROMPT BAR. Both animate in via the workspace
+   `.app-ws--document.is-ai-open` state class (one coordinated open/close). ---- */
+
+/* Right sidebar — a flex child of .doc-body, so the document column shrinks to make
+   room (it is NEVER an overlay). Width animates open/closed. */
+.doc-ai-sidebar {
+  flex: 0 0 0; width: 0; overflow: hidden;
+  border-left: 1px solid var(--ws-border); background: var(--ws-surface, #fff);
+  display: flex; flex-direction: column; min-height: 0;
+  transition: width .26s cubic-bezier(.4, 0, .2, 1), flex-basis .26s cubic-bezier(.4, 0, .2, 1);
+  will-change: width;
+}
+/* The sidebar appears only once there's a conversation (`is-ai-chat`), not just
+   when the prompt bar opens (`is-ai-open`). */
+.app-ws--document.is-ai-chat .doc-ai-sidebar { flex-basis: 250px; width: 250px; }
+@media (max-width: 1100px) { .app-ws--document.is-ai-chat .doc-ai-sidebar { flex-basis: 220px; width: 220px; } }
+/* Keep inner content from reflowing while the width animates. */
+.doc-ai-sidebar > * { min-width: 210px; }
+@media (max-width: 1100px) { .doc-ai-sidebar > * { min-width: 190px; } }
+
+.doc-ai-side__head {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--ws-border);
+}
+.doc-ai-side__title { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 12.5px; color: var(--ws-text); white-space: nowrap; }
+.doc-ai-side__title-ico { display: inline-flex; color: #a855f7; }
+.doc-ai-side__title-ico .ws-icon { width: 15px; height: 15px; }
+.doc-ai-side__tools { display: inline-flex; align-items: center; gap: 4px; }
+.doc-ai-side__tool {
+  padding: 3px 8px; border: 1px solid var(--ws-border); border-radius: 999px; cursor: pointer;
+  background: var(--ws-surface, #fff); color: var(--ws-text); font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.doc-ai-side__tool:hover { border-color: color-mix(in srgb, #a855f7 45%, transparent); color: var(--ws-primary-dark, #4f46e5); }
+.doc-ai-side__close {
+  flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--ws-text-soft, #64748b); cursor: pointer; font-size: 12px;
+}
+.doc-ai-side__close:hover { background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); }
+
+.doc-ai__msgs { flex: 1 1 auto; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.doc-ai__msg { max-width: 94%; padding: 7px 10px; border-radius: 12px; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.doc-ai__msg--ai { align-self: flex-start; background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); border-bottom-left-radius: 4px; }
+.doc-ai__msg--user { align-self: flex-end; background: linear-gradient(100deg, #6366f1, #a855f7); color: #fff; border-bottom-right-radius: 4px; }
+
+/* Empty state shown before the first message. */
+.doc-ai__empty { margin: auto; text-align: center; color: var(--ws-text-soft, #64748b); padding: 16px 12px; }
+.doc-ai__empty-ico { display: inline-flex; color: #a855f7; margin-bottom: 6px; }
+.doc-ai__empty-ico .ws-icon { width: 22px; height: 22px; }
+.doc-ai__empty-title { font-weight: 700; font-size: 13.5px; color: var(--ws-text); margin-bottom: 3px; }
+.doc-ai__empty-sub { font-size: 11.5px; line-height: 1.45; }
+
+/* Bottom prompt bar — floats at the bottom-centre of the (resizing) document column;
+   slides up + fades in with the sidebar. */
+/* Floating prompt bar: a compact pill centered near the bottom of the document.
+ * Because the dock is anchored at the BOTTOM and lays its children out as a column,
+ * the pill grows UPWARD as the textarea auto-expands (the panel moves up). */
+.doc-ai-dock {
+  position: absolute; left: 50%; bottom: 8px; z-index: 60; isolation: isolate;
+  width: min(440px, calc(100% - 32px));
+  display: flex; flex-direction: column; gap: 6px; pointer-events: none;
+  transform: translate(-50%, 12px); opacity: 0; visibility: hidden;
+  transition: opacity .22s ease, transform .22s ease, visibility .22s;
+}
+.app-ws--document.is-ai-open .doc-ai-dock { transform: translate(-50%, 0); opacity: 1; visibility: visible; }
 .doc-ai-dock > * { pointer-events: auto; }
-/* Left `+` button — the entry point for AI actions / "what the AI can do". */
-.doc-ai-bar__plus {
-  flex: 0 0 auto; width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer;
+/* Quick-task suggestion chips row above the bar — hidden until the `+` reveals it. */
+.doc-ai-tasks { display: none; flex-wrap: wrap; gap: 5px; justify-content: center; }
+.doc-ai-dock.is-tasks-open .doc-ai-tasks { display: flex; }
+.doc-ai-task {
+  padding: 3px 9px; border: 1px solid var(--ws-border); border-radius: 999px; cursor: pointer;
+  background: var(--ws-surface, #fff); color: var(--ws-text); font-size: 11px; font-weight: 600; white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(19, 22, 45, 0.10);
+}
+.doc-ai-task:hover { border-color: color-mix(in srgb, #a855f7 45%, transparent); color: var(--ws-primary-dark, #4f46e5); }
+/* align-items:flex-end keeps the +/upload/send/close pinned to the BOTTOM as the
+ * textarea grows to multiple lines (send stays bottom-right, ChatGPT-style). */
+.doc-ai-bar {
+  display: flex; align-items: flex-end; gap: 6px;
+  width: 100%; min-height: 40px; padding: 5px 5px 5px 12px;
+  border: 1px solid var(--ws-border); border-radius: 20px;
+  background: var(--ws-surface, #fff); box-shadow: 0 6px 20px rgba(19, 22, 45, 0.16);
+}
+.doc-ai-bar:focus-within { border-color: color-mix(in srgb, #a855f7 55%, transparent); box-shadow: 0 6px 20px rgba(168, 85, 247, 0.20); }
+/* Left-side `+` (tasks) and image-upload buttons inside the pill. */
+.doc-ai-bar__more, .doc-ai-bar__upload {
+  flex: 0 0 auto; width: 26px; height: 26px; border: 0; border-radius: 50%; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--ws-primary-soft, #eef2ff); color: var(--ws-primary-dark, #6d28d9);
 }
-.doc-ai-bar__plus:hover { background: color-mix(in srgb, #a855f7 20%, var(--ws-primary-soft, #eef2ff)); }
-.doc-ai-bar__plus .ws-icon { width: 18px; height: 18px; }
-.doc-ai-bar {
-  display: flex; align-items: center; gap: 8px;
-  height: 48px; padding: 0 6px 0 14px;
-  border: 1px solid var(--ws-border); border-radius: 26px;
-  background: var(--ws-surface, #fff); box-shadow: 0 8px 26px rgba(19, 22, 45, 0.18);
+.doc-ai-bar__more:hover, .doc-ai-bar__upload:hover { background: color-mix(in srgb, #a855f7 20%, var(--ws-primary-soft, #eef2ff)); }
+.doc-ai-bar__more .ws-icon, .doc-ai-bar__upload .ws-icon { width: 15px; height: 15px; }
+/* Locked (coming-soon) image button: dimmed, not-allowed, with a small lock badge. */
+.doc-ai-bar__upload.is-locked { position: relative; opacity: .5; cursor: not-allowed; }
+.doc-ai-bar__upload.is-locked:hover { background: var(--ws-primary-soft, #eef2ff); }
+.doc-ai-bar__upload.is-locked::after {
+  content: '🔒'; position: absolute; right: -3px; bottom: -3px; font-size: 9px; line-height: 1;
 }
-.doc-ai-bar:focus-within { border-color: color-mix(in srgb, #a855f7 55%, transparent); box-shadow: 0 8px 26px rgba(168, 85, 247, 0.22); }
+.doc-ai-dock.is-tasks-open .doc-ai-bar__more { background: linear-gradient(100deg, #6366f1, #a855f7); color: #fff; }
+.doc-ai-file { display: none; }
 .doc-ai-bar__close {
-  flex: 0 0 auto; width: 30px; height: 30px; border: 0; border-radius: 50%; background: transparent;
-  color: var(--ws-text-soft, #64748b); cursor: pointer; font-size: 13px;
+  flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: 50%; background: transparent;
+  color: var(--ws-text-soft, #64748b); cursor: pointer; font-size: 11px;
 }
 .doc-ai-bar__close:hover { background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); }
-/* The input sits transparent inside the pill (no inner border/box). */
+/* Auto-growing textarea (JS sets height to scrollHeight up to max-height). It sits
+ * transparent inside the pill; past ~180px it keeps its own internal scrollbar so
+ * text never overflows the pill. */
 .doc-ai__input {
-  flex: 1 1 auto; resize: none; min-height: 24px; max-height: 110px; padding: 6px 2px;
-  border: 0; background: transparent; color: var(--ws-text); font: inherit; font-size: 14px; line-height: 1.4;
+  flex: 1 1 auto; resize: none; min-height: 24px; max-height: 180px; overflow-y: auto;
+  padding: 5px 2px; border: 0; background: transparent; color: var(--ws-text);
+  font: inherit; font-size: 13px; line-height: 1.4;
 }
 .doc-ai__input:focus { outline: none; }
+.doc-ai__input::placeholder { font-size: 12.5px; }
 .doc-ai__send {
-  flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer;
+  flex: 0 0 auto; width: 30px; height: 30px; border: 0; border-radius: 50%; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; color: #fff;
   background: linear-gradient(100deg, #6366f1, #a855f7, #ec4899);
 }
-.doc-ai__send .ws-icon { width: 17px; height: 17px; }
+.doc-ai__send .ws-icon { width: 15px; height: 15px; }
 .doc-ai__send:hover { filter: brightness(1.08); }
+@media (prefers-reduced-motion: reduce) { .doc-ai-sidebar, .doc-ai-dock { transition: none; } }
 
-/* Popover above the bar: conversation + quick chips. Compact, scrolls when tall. */
-.doc-ai-pop {
-  display: none; flex-direction: column; max-height: min(46vh, 340px); overflow: hidden;
-  border: 1px solid var(--ws-border); border-radius: 16px; background: var(--ws-surface, #fff);
-  box-shadow: 0 10px 30px rgba(19, 22, 45, 0.18);
+/* Floating "Edit with AI" toolbar — appears at a text selection in the page. */
+.doc-ai-selbar {
+  position: fixed; top: 0; left: 0; z-index: 120; display: none;
+  align-items: center; gap: 6px; max-width: min(440px, 92vw);
+  padding: 5px 6px 5px 10px; border: 1px solid var(--ws-border); border-radius: 18px;
+  background: var(--ws-surface, #fff); box-shadow: 0 10px 28px rgba(19, 22, 45, 0.24);
 }
-.doc-ai-pop.is-visible { display: flex; }
-.doc-ai__msgs { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.doc-ai__msgs:empty { display: none; }
-.doc-ai__msg { max-width: min(90%, 560px); padding: 8px 11px; border-radius: 13px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-.doc-ai__msg--ai { align-self: flex-start; background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); border-bottom-left-radius: 4px; }
-.doc-ai__msg--user { align-self: flex-end; background: linear-gradient(100deg, #6366f1, #a855f7); color: #fff; border-bottom-right-radius: 4px; }
-.doc-ai__chips { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; }
-.doc-ai__msgs:not(:empty) + .doc-ai__chips { border-top: 1px solid var(--ws-border); }
-.doc-ai__chip {
-  padding: 5px 10px; border: 1px solid var(--ws-border); border-radius: 999px;
-  background: var(--ws-surface, #fff); color: var(--ws-text); font-size: 12px; cursor: pointer; white-space: nowrap;
+.doc-ai-selbar.is-open { display: flex; }
+.doc-ai-sel__ico { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: #a855f7; flex: 0 0 auto; }
+.doc-ai-sel__ico .ws-icon { width: 16px; height: 16px; }
+.doc-ai-sel__input { flex: 1 1 auto; min-width: 210px; border: 0; background: transparent; color: var(--ws-text); font: inherit; font-size: 13px; padding: 4px 2px; }
+.doc-ai-sel__input:focus { outline: none; }
+.doc-ai-sel__input::placeholder { font-size: 12.5px; }
+.doc-ai-sel__send {
+  flex: 0 0 auto; width: 28px; height: 28px; border: 0; border-radius: 50%; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; color: #fff;
+  background: linear-gradient(100deg, #6366f1, #a855f7, #ec4899);
 }
-.doc-ai__chip:hover { border-color: color-mix(in srgb, #a855f7 45%, transparent); color: var(--ws-primary-dark, #4f46e5); }
+.doc-ai-sel__send .ws-icon { width: 14px; height: 14px; }
+.doc-ai-sel__send:hover { filter: brightness(1.08); }
+/* Persistent selection highlight (kept visible while the pill's input has focus). */
+.doc-ai-selhi { position: fixed; inset: 0; z-index: 118; pointer-events: none; }
+.doc-ai-selhi__box { position: fixed; background: rgba(99, 102, 241, 0.32); border-radius: 2px; }
+.doc-ai__msg-text { white-space: pre-wrap; }
+/* "Insert into document" action under an AI reply. */
+.doc-ai__insert {
+  margin-top: 8px; padding: 5px 12px; border: 0; border-radius: 999px; cursor: pointer;
+  font-size: 12px; font-weight: 600; color: #fff;
+  background: linear-gradient(100deg, #6366f1, #a855f7, #ec4899);
+}
+.doc-ai__insert:hover { filter: brightness(1.08); }
+.doc-ai__insert[hidden] { display: none; }
 
 /* Two-tier Download menu: primary Quick Export + Advanced Export. */
 .doc-export-menu--rich { min-width: 264px; padding: 7px; }

@@ -1,90 +1,99 @@
-<section class="page-hero page-hero--legal">
-  <div class="container">
-    <span class="eyebrow eyebrow--center">Trust &amp; Safety</span>
-    <h1 class="page-hero__title">Security at <%= site.name %></h1>
-    <p class="page-hero__lead">
-      Our approach to security starts with a simple idea: the safest way to handle your documents
-      is to never send them to us at all. Here is how the platform is built.
-    </p>
+<%
+// ============================================================
+//  Security — premium dark layout (matches the design ref).
+//  Styling: public/css/security.css (loaded only on "/security").
+// ============================================================
+const hi = {
+  file:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>',
+  eyeoff:   '<path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a18 18 0 0 1-2.16 3.19M6.6 6.6A18 18 0 0 0 2 12s3 8 10 8a9.3 9.3 0 0 0 5.4-1.6"/><path d="M14.1 14.1a3 3 0 0 1-4.2-4.2"/><path d="M2 2l20 20"/>',
+  lock:     '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  shieldck: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  server:   '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  users:    '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
+  refresh:  '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
+  docck:    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h6"/><path d="M14 2v6h6"/><path d="m16 18 2 2 4-4"/>',
+  shield:   '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+  arrow:    '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+function ic(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (hi[name] || hi.file) + '</svg>';
+}
+
+const pillars = [
+  { icon: 'file',     tint: 'violet', title: 'Files Processed in Your Browser', desc: 'All document editing, conversion and analysis happen directly in your browser. Your files are never uploaded to our servers, giving you complete control over your data.' },
+  { icon: 'eyeoff',   tint: 'rose',   title: 'No Document Storage',            desc: 'We do not store, save or keep any copies of your files. Once you close the tab or finish your task, your files are automatically removed from our systems.' },
+  { icon: 'lock',     tint: 'violet', title: 'Encrypted Connections',          desc: 'Our website uses HTTPS with TLS encryption to protect your connection. All data between your browser and our site is securely encrypted to prevent eavesdropping or tampering.' },
+  { icon: 'shieldck', tint: 'violet', title: 'Safe and Compliant Technology',  desc: 'We follow industry best practices, regularly update our systems, and use secure coding standards to minimize risks and keep the platform safe for everyone.' },
+  { icon: 'eyeoff',   tint: 'rose',   title: 'No Third-Party Trackers',        desc: 'We do not use third-party analytics or tracking scripts by default. Your activity is not tracked across the web, and we do not share your data with advertisers.' },
+  { icon: 'server',   tint: 'violet', title: 'Minimal Server Use',             desc: 'Our servers are only used to deliver the website and essential application files. There are no document processing endpoints on our servers, which keeps the attack surface as small as possible.' },
+  { icon: 'users',    tint: 'violet', title: 'Your Privacy Matters',           desc: 'We only collect the minimal information needed to provide our services (for example, account details for premium features). We never sell your personal data to anyone.' },
+  { icon: 'refresh',  tint: 'violet', title: 'Ongoing Security Improvements',  desc: 'We continuously monitor for vulnerabilities, apply security patches and improve our systems to stay ahead of potential threats.' },
+  { icon: 'docck',    tint: 'violet', title: 'Transparent and Honest',         desc: 'We believe in clear communication. If there is ever a security incident, we will inform affected users quickly and transparently.' },
+];
+%>
+
+<!-- ============ HERO ============ -->
+<section class="sec-hero">
+  <div class="sec-hero__aura" aria-hidden="true"></div>
+  <div class="container sec-hero__inner">
+    <div class="sec-hero__copy">
+      <span class="kicker">Trusted &nbsp;&bull;&nbsp; Private &nbsp;&bull;&nbsp; Secure</span>
+      <h1 class="sec-hero__title">Your Security<br><span class="grad">Our Priority</span></h1>
+      <p class="sec-hero__sub">
+        At <%= site.name %>, we believe your documents are personal and important.
+        That's why we've built our platform with strong security, privacy and
+        transparency — so you can work with confidence.
+      </p>
+      <ul class="sec-pills">
+        <li><span class="sec-pills__ico"><%- ic('shield') %></span>Private by design</li>
+        <li><span class="sec-pills__ico"><%- ic('lock') %></span>No file storage</li>
+        <li><span class="sec-pills__ico"><%- ic('users') %></span>You stay in control</li>
+      </ul>
+    </div>
+
+    <div class="sec-hero__visual" aria-hidden="true">
+      <div class="sec-shield">
+        <span class="sec-shield__doc"><%- ic('file') %></span>
+        <span class="sec-shield__badge"><%- ic('shield') %><i class="sec-shield__lock"><%- ic('lock') %></i></span>
+      </div>
+      <span class="sec-note">Your Documents<br>Stay Yours</span>
+      <span class="sec-tag">Simple Tools. Stronger Privacy.</span>
+    </div>
   </div>
 </section>
 
-<section class="section">
+<!-- ============ PILLARS ============ -->
+<section class="sec-sec">
   <div class="container">
-    <div class="security-grid">
-
-      <article class="security-card">
-        <span class="security-card__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'protect' }) %></span>
-        <h2>Processing stays in your browser</h2>
-        <p>
-          The tools run entirely on your device. When you open a file, it is read and processed
-          locally — it is not uploaded to our servers, and we never see or store its contents.
-        </p>
-      </article>
-
-      <article class="security-card">
-        <span class="security-card__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'sign' }) %></span>
-        <h2>No document storage on our side</h2>
-        <p>
-          Because your files never reach us, there is no server-side document database to breach.
-          Your working copy lives in your browser and is discarded when you close the tab.
-        </p>
-      </article>
-
-      <article class="security-card">
-        <span class="security-card__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'convert' }) %></span>
-        <h2>Encrypted connections (HTTPS)</h2>
-        <p>
-          In production, the site is served over HTTPS, so traffic between your browser and the
-          website is encrypted in transit using TLS.
-        </p>
-      </article>
-
-      <article class="security-card">
-        <span class="security-card__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'organize' }) %></span>
-        <h2>Strict Content Security Policy</h2>
-        <p>
-          The app ships a strict Content Security Policy and other security headers to reduce the
-          risk of cross-site scripting and code injection. Scripts run only from our own domain.
-        </p>
-      </article>
-
-      <article class="security-card">
-        <span class="security-card__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'split' }) %></span>
-        <h2>No third-party trackers by default</h2>
-        <p>
-          Fonts and application code are served from our own domain, and we do not load third-party
-          analytics or tracking scripts by default. Advertising cookies are used only with consent
-          where required.
-        </p>
-      </article>
-
-      <article class="security-card">
-        <span class="security-card__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'compress' }) %></span>
-        <h2>A small, focused server</h2>
-        <p>
-          Our server’s job is deliberately limited: it delivers the website and application files.
-          It has no document-processing endpoints, which keeps the attack surface small.
-        </p>
-      </article>
-
+    <div class="sec-grid">
+      <% pillars.forEach(function (p) { %>
+        <article class="sec-card">
+          <span class="sec-card__ico tint-<%= p.tint %>"><%- ic(p.icon) %></span>
+          <h2><%= p.title %></h2>
+          <p><%= p.desc %></p>
+        </article>
+      <% }); %>
     </div>
+  </div>
+</section>
 
-    <div class="security-note prose">
-      <h2>What we don’t claim</h2>
-      <p>
-        We believe security should be described honestly. No online service can promise to be
-        “100% secure,” and we don’t. We don’t use marketing phrases like “military-grade encryption,”
-        and we don’t hold certifications we haven’t earned. What we can say is specific and true: your
-        files are processed in your browser and are not uploaded to or stored by <%= site.name %>.
-      </p>
-      <h2>Reporting a vulnerability</h2>
-      <p>
-        If you believe you have found a security issue, we would genuinely like to hear from you.
-        Please email <a href="mailto:<%= site.contactEmail %>"><%= site.contactEmail %></a> with the
-        details so we can investigate. For more on data handling, see our
-        <a href="/privacy">Privacy Policy</a>.
-      </p>
+<!-- ============ COMMITMENT ============ -->
+<section class="sec-sec sec-commitsec">
+  <div class="container">
+    <div class="sec-commit">
+      <div class="sec-commit__aura" aria-hidden="true"></div>
+      <span class="sec-commit__badge"><%- ic('shield') %></span>
+      <div class="sec-commit__copy">
+        <span class="kicker">Our commitment</span>
+        <h2>A Safer Place for Your Documents</h2>
+        <p>
+          Security is not a one-time feature — it's an ongoing commitment. We are dedicated
+          to maintaining a secure, reliable and trustworthy platform for everyone. If you have
+          any security questions or want to report a vulnerability, please contact us at
+          <a href="mailto:<%= site.contactEmail %>"><%= site.contactEmail %></a>.
+        </p>
+      </div>
+      <span class="sec-commit__note">Your Trust<br>Drives Us</span>
     </div>
   </div>
 </section>

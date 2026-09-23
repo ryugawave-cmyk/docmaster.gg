@@ -99,6 +99,17 @@ export default {
       return Response.json({ status: 'ok', ts: Date.now() });
     }
 
+    // ----- Contact form -----------------------------------------------------
+    // Stores each submission in KV (viewable in the Cloudflare dashboard) and, if
+    // an email provider secret is set, forwards it to the owner's inbox.
+    if (pathname === '/api/contact' && request.method === 'POST') {
+      return handleContact(request, env, ctx);
+    }
+    // Read the stored messages from KV (needs ?token=CONTACT_ADMIN_TOKEN).
+    if (pathname === '/api/contact/inbox' || pathname === '/api/contact/messages') {
+      return handleContactRead(request, env, url);
+    }
+
     // ----- Future cloud AI --------------------------------------------------
     // When you add a cloud model, implement it here and read the key from
     // env (a Worker secret). Until then, return 501 so nothing pretends to work.
@@ -156,6 +167,108 @@ export default {
     return withAssetHeaders(res, url);
   },
 };
+
+/**
+ * Contact form handler (production). Validates the JSON body, stores the message
+ * in KV (env.CONTACT_KV — visible under Workers & Pages → KV in the dashboard), and
+ * forwards it to the owner's inbox if an email provider secret is configured:
+ *   • env.WEB3FORMS_KEY  — free relay to any inbox (no domain needed), or
+ *   • env.RESEND_API_KEY (+ optional RESEND_FROM / CONTACT_TO).
+ * Email is best-effort; a stored message is a success even if delivery is off.
+ */
+async function handleContact(request, env, ctx) {
+  const json = (body, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+
+  let b;
+  try { b = await request.json(); } catch { return json({ error: 'Invalid request.' }, 400); }
+  const clip = (s, n) => String(s || '').trim().slice(0, n);
+  // Honeypot: bots fill the hidden "company" field.
+  if (clip(b.company, 100)) return json({ ok: true });
+
+  const name = clip(b.name, 120);
+  const email = clip(b.email, 200);
+  const reason = clip(b.reason, 80) || 'General question';
+  const message = clip(b.message, 8000);
+  if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !message) {
+    return json({ error: 'Please provide your name, a valid email, and a message.' }, 400);
+  }
+
+  const record = {
+    ts: new Date().toISOString(),
+    name, email, reason, message,
+    ip: request.headers.get('cf-connecting-ip') || '',
+    ua: clip(request.headers.get('user-agent'), 300),
+    country: (request.cf && request.cf.country) || '',
+  };
+
+  // 1) Store in KV (durable; browse in the dashboard). Bind CONTACT_KV in wrangler.
+  let stored = false;
+  if (env.CONTACT_KV) {
+    try {
+      const key = `msg:${record.ts}:${crypto.randomUUID().slice(0, 8)}`;
+      await env.CONTACT_KV.put(key, JSON.stringify(record));
+      stored = true;
+    } catch (err) { console.error('[contact] KV put failed:', err.message); }
+  }
+
+  // 2) Forward via email (best-effort).
+  let emailed = false;
+  const to = env.CONTACT_TO || 'bloodpath9089@gmail.com';
+  const subject = `[Advance Office Doc] ${reason} — ${name}`;
+  const text = `Name: ${name}\nEmail: ${email}\nReason: ${reason}\nTime: ${record.ts}\n\n${message}`;
+  try {
+    if (env.WEB3FORMS_KEY) {
+      const r = await fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ access_key: env.WEB3FORMS_KEY, subject, from_name: name, replyto: email, email, message: text }),
+      });
+      emailed = r.ok;
+    } else if (env.RESEND_API_KEY) {
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.RESEND_API_KEY}` },
+        body: JSON.stringify({ from: env.RESEND_FROM || 'Advance Office Doc <onboarding@resend.dev>', to: [to], reply_to: email, subject, text }),
+      });
+      emailed = r.ok;
+    }
+  } catch (err) { console.error('[contact] email failed:', err.message); }
+
+  if (!stored && !emailed) return json({ error: 'Could not deliver your message. Please email us directly.' }, 500);
+  return json({ ok: true, emailed });
+}
+
+/** Read stored contact messages from KV (production inbox). Gated by a token
+ *  (?token= or x-admin-token) matching env.CONTACT_ADMIN_TOKEN. Returns JSON at
+ *  /api/contact/messages and a simple HTML table at /api/contact/inbox. */
+async function handleContactRead(request, env, url) {
+  const token = env.CONTACT_ADMIN_TOKEN || '';
+  const given = url.searchParams.get('token') || request.headers.get('x-admin-token') || '';
+  if (!token || given !== token) {
+    return new Response('Forbidden. Append ?token=YOUR_TOKEN (set CONTACT_ADMIN_TOKEN as a Worker secret).', { status: 403 });
+  }
+  if (!env.CONTACT_KV) {
+    return new Response('KV is not configured. Bind CONTACT_KV in wrangler.jsonc.', { status: 503 });
+  }
+  const list = await env.CONTACT_KV.list({ prefix: 'msg:', limit: 1000 });
+  const msgs = [];
+  for (const k of list.keys) {
+    const v = await env.CONTACT_KV.get(k.name);
+    if (v) { try { msgs.push(JSON.parse(v)); } catch { /* skip */ } }
+  }
+  msgs.reverse(); // newest first (keys are timestamp-prefixed)
+
+  if (url.pathname === '/api/contact/messages') {
+    return new Response(JSON.stringify({ messages: msgs }), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  }
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = msgs.map((m) => `<tr><td class="ts">${esc((m.ts || '').replace('T', ' ').replace(/\..+/, ''))}</td><td>${esc(m.name)}<br><a href="mailto:${esc(m.email)}">${esc(m.email)}</a></td><td>${esc(m.reason)}</td><td class="msg">${esc(m.message)}</td></tr>`).join('');
+  const html = `<!doctype html><meta charset="utf8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Contact inbox (${msgs.length})</title>
+  <style>body{font:15px/1.5 system-ui,Segoe UI,Arial;margin:0;background:#f6f7fb;color:#111}header{padding:18px 24px;background:#4f46e5;color:#fff}header h1{margin:0;font-size:18px}.wrap{padding:20px 24px}table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.06)}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #eef;vertical-align:top}th{background:#f0f1f8;font-size:12px;text-transform:uppercase}td.ts{white-space:nowrap;color:#666;font-size:13px}td.msg{white-space:pre-wrap;max-width:520px}.empty{padding:40px;text-align:center;color:#777}</style>
+  <header><h1>📨 Contact inbox</h1></header><div class="wrap">${msgs.length ? `<table><thead><tr><th>When</th><th>From</th><th>Reason</th><th>Message</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No messages yet.</div>'}</div>`;
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
 
 function withAssetHeaders(res, url) {
   const headers = new Headers(res.headers);

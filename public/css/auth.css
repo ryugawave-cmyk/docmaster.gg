@@ -1,24 +1,26 @@
-/* Advance Office Doc — Google sign-in UI (header).
+/* Advance Office Doc — auth UI (header sign-in + account menu + modal).
    Self-contained so it doesn't disturb existing styles. Reuses the site's .btn
-   classes for the sign-in button; adds the signed-in chip + dropdown. */
+   classes for the Sign In button; adds the signed-in avatar, its dropdown, and
+   the sign-in modal. Clean SaaS styling, no visible vendor branding. */
 
 .auth-area {
   display: inline-flex;
   align-items: center;
 }
 
-/* Sign-in button: align the Google mark with the label. */
+/* Sign In button: plain text label, no Google mark (matches site .btn-outline). */
 .auth-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  font-weight: 600;
 }
-.auth-btn .auth-g {
-  display: block;
-  flex: 0 0 auto;
+/* `.btn { display: inline-flex }` outranks the [hidden] UA rule, so make hiding
+   explicit — otherwise the Sign In button and the avatar could show at once. */
+.auth-btn[hidden] {
+  display: none !important;
 }
 
-/* Signed-in chip */
+/* ---- Signed-in avatar (avatar only, no name) ------------------------- */
 .auth-chip-wrap {
   position: relative;
   display: inline-flex;
@@ -26,43 +28,34 @@
 .auth-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.6rem 0.3rem 0.3rem;
-  border: 1px solid rgba(120, 120, 140, 0.28);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  justify-content: center;
+  padding: 0;
+  border: 2px solid rgba(120, 120, 140, 0.28);
+  border-radius: 50%;
+  background: transparent;
   color: inherit;
-  font: inherit;
-  font-weight: 600;
   cursor: pointer;
-  line-height: 1;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  line-height: 0;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 .auth-chip:hover {
-  background: rgba(120, 120, 140, 0.14);
-  border-color: rgba(120, 120, 140, 0.45);
+  border-color: var(--color-primary, #6366f1);
+  transform: translateY(-1px);
 }
 .auth-chip:focus-visible {
-  outline: 2px solid #6366f1;
-  outline-offset: 2px;
-}
-.auth-name {
-  max-width: 8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.auth-caret {
-  opacity: 0.7;
+  outline: none;
+  border-color: var(--color-primary, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
 }
 
 /* Avatar (Google picture or a colored initial fallback) */
 .auth-avatar {
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   object-fit: cover;
   flex: 0 0 auto;
+  display: block;
 }
 .auth-avatar--initial {
   display: inline-flex;
@@ -70,31 +63,40 @@
   justify-content: center;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   font-weight: 700;
+  line-height: 1;
 }
 
-/* Dropdown */
+/* ---- Account dropdown ------------------------------------------------- */
 .auth-menu {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 10px);
   right: 0;
-  min-width: 220px;
-  padding: 0.5rem;
+  min-width: 232px;
+  padding: 0.4rem;
   background: #fff;
   color: #1f2430;
-  border: 1px solid rgba(120, 120, 140, 0.2);
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(15, 16, 32, 0.18);
+  border: 1px solid rgba(120, 120, 140, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(15, 16, 32, 0.2);
   z-index: 60;
+  transform-origin: top right;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.97);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.auth-menu.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 .auth-menu[hidden] {
   display: none;
 }
 .auth-menu__info {
-  padding: 0.35rem 0.5rem 0.6rem;
-  border-bottom: 1px solid rgba(120, 120, 140, 0.16);
-  margin-bottom: 0.4rem;
+  padding: 0.5rem 0.6rem 0.65rem;
+  border-bottom: 1px solid rgba(120, 120, 140, 0.14);
+  margin-bottom: 0.35rem;
 }
 .auth-menu__name {
   font-weight: 700;
@@ -105,24 +107,214 @@
 }
 .auth-menu__email {
   font-size: 0.82rem;
-  opacity: 0.7;
+  opacity: 0.65;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.auth-menu__signout {
+.auth-menu__item {
   display: block;
   width: 100%;
-  padding: 0.55rem 0.5rem;
+  padding: 0.55rem 0.6rem;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
-  color: #d92d20;
+  color: inherit;
   font: inherit;
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.auth-menu__item:hover {
+  background: rgba(99, 102, 241, 0.09);
+}
+.auth-menu__signout {
+  margin-top: 0.2rem;
+  color: #d92d20;
+  font-weight: 600;
 }
 .auth-menu__signout:hover {
   background: rgba(217, 45, 32, 0.08);
+}
+
+/* ---- Sign-in modal --------------------------------------------------- */
+.auth-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(15, 16, 32, 0.55);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.auth-modal[hidden] {
+  display: none;
+}
+.auth-modal.is-open {
+  opacity: 1;
+}
+.auth-modal__card {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  padding: 2.25rem 1.75rem 1.6rem;
+  background: #fff;
+  color: #1a1c2e;
+  border-radius: 20px;
+  box-shadow: 0 30px 80px rgba(15, 16, 32, 0.4);
+  text-align: center;
+  transform: translateY(14px) scale(0.96);
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.auth-modal.is-open .auth-modal__card {
+  transform: translateY(0) scale(1);
+}
+.auth-modal__close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.9rem;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7086;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.auth-modal__close:hover {
+  background: rgba(120, 120, 140, 0.12);
+  color: #1a1c2e;
+}
+.auth-modal__title {
+  margin: 0 0 0.6rem;
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.auth-modal__lead {
+  margin: 0 auto 1.5rem;
+  max-width: 21rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: #565a75;
+}
+.auth-modal__google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid #dadce0;
+  border-radius: 12px;
+  background: #fff;
+  color: #3c4043;
+  font: inherit;
+  font-size: 0.98rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.auth-modal__google:hover {
+  background: #f7f8fc;
+  box-shadow: 0 2px 8px rgba(60, 64, 67, 0.15);
+  border-color: #c9ccd1;
+}
+.auth-modal__google:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
+}
+.auth-modal__glogo {
+  flex: 0 0 auto;
+}
+.auth-modal__note {
+  margin: 0.95rem 0 0;
+  font-size: 0.8rem;
+  color: #8a8fa3;
+}
+
+body.auth-modal-open {
+  overflow: hidden;
+}
+
+/* ---- Workspace sign-in gate (full-screen; blocks the editor) --------- */
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(99, 102, 241, 0.22), transparent 60%),
+    #0f1020;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.auth-gate.is-open {
+  opacity: 1;
+}
+.auth-gate__card {
+  width: 100%;
+  max-width: 400px;
+  padding: 2.5rem 1.9rem 1.8rem;
+  background: #fff;
+  color: #1a1c2e;
+  border-radius: 20px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  transform: translateY(14px) scale(0.97);
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.auth-gate.is-open .auth-gate__card {
+  transform: translateY(0) scale(1);
+}
+.auth-gate__title {
+  margin: 0 0 0.6rem;
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.auth-gate__lead {
+  margin: 0 auto 1.6rem;
+  max-width: 22rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: #565a75;
+}
+.auth-gate__back {
+  display: inline-block;
+  margin-top: 1.1rem;
+  font-size: 0.85rem;
+  color: #6b7086;
+  text-decoration: none;
+}
+.auth-gate__back:hover {
+  color: #1a1c2e;
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-gate,
+  .auth-gate__card {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-menu,
+  .auth-modal,
+  .auth-modal__card {
+    transition: none;
+  }
 }

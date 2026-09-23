@@ -118,6 +118,10 @@ function createApp() {
   app.use(morgan(config.isProduction ? 'combined' : 'dev'));
 
   // ----- Body parsing ------------------------------------------------------
+  // The AI proxy can receive a document IMAGE (base64) for the "recreate as
+  // editable" flow, so it gets a larger JSON limit; this runs first and marks the
+  // body parsed, so the 1mb global parser below skips it. Everything else stays 1mb.
+  app.use('/api/ai', express.json({ limit: '16mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 

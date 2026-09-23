@@ -21,6 +21,25 @@
     "run_worker_first": true
   }
 
+  // ----- Contact form (POST /api/contact in worker/index.js) --------------
+  // Messages are STORED in KV (browse them under Workers & Pages → KV in the
+  // dashboard) and, if a mail provider is set, EMAILED to your inbox.
+  //
+  // 1) To store in KV, create a namespace and uncomment the binding below:
+  //      npx wrangler kv namespace create CONTACT_KV
+  //    then paste the printed id here (add a comma after the assets block) and
+  //    redeploy:
+  //      "kv_namespaces": [
+  //        { "binding": "CONTACT_KV", "id": "<your-kv-namespace-id>" }
+  //      ]
+  //
+  // 2) To EMAIL every message to your inbox (easiest — no domain/DNS needed),
+  //    get a free access key at https://web3forms.com and set it as a secret:
+  //      npx wrangler secret put WEB3FORMS_KEY
+  //      npx wrangler secret put CONTACT_TO      # optional: your inbox address
+  //    (Alternatively use Resend: set RESEND_API_KEY and optionally RESEND_FROM.)
+  //    Secrets are set on the deployed Worker — never in this file or the client.
+
   // The oversized AI files (the 59 MB ONNX layout model + the 26 MB ORT .wasm)
   // exceed Cloudflare's 25 MiB asset limit, so they are NOT bundled here. They
   // are published on this repo's GitHub Release and the Worker proxies them

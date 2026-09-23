@@ -15,7 +15,7 @@ import { el } from '../../../workspace/utils/dom.js';
 import { renderIcon } from '../../../workspace/icons.js';
 import { selection, emptySelection, SelectionKind } from '../../core/selection.js';
 import { createDocumentEditor } from '../../editor/documentEditor.js';
-import { createBlankDocument, createDocument, createParagraph, createRun, documentToText } from '../../model/documentModel.js';
+import { createBlankDocument, createDocument, createParagraph, createRun, createTableBlock, createListBlock, documentToText } from '../../model/documentModel.js';
 import { blockModelToDocx, blockModelToPdf, htmlBlob } from '../../services/convert/blockExport.js';
 import { docxToBlockModel } from '../../services/convert/docxImport.js';
 import { createDocExportPanel } from './docExportPanel.js';
@@ -113,8 +113,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
       // The header/footer "Options ▾ · Header & footer settings" opens our dialog.
       onRequestHfSettings: () => openHfSettings(),
     });
-    // The AI Assistant chat bar is a permanent fixture at the bottom of the editor
-    // (no top toggle button) — build it once alongside the editor scaffold.
+    // Build the AI machinery now (not lazily) so the floating "Edit with AI"
+    // selection toolbar is armed as soon as the user selects text — no need to open
+    // the AI panel first. The dock/sidebar stay hidden until toggled.
     if (!ui.aiPanel) buildAiPanel();
     return editor;
   }
@@ -207,41 +208,88 @@ export function createDocumentWorkspace({ bus, store, services }) {
         ]),
       ]),
       // Download lives at the top-right of the menu bar (pushed there via CSS).
-      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkExportMenu()]),
+      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkAiAssistant(), mkExportMenu()]),
     );
   }
 
+  // AI Assistant: a gradient-glow button at the top-right (next to Export) that
+  // opens the assistant — a docked right sidebar for the conversation plus a small
+  // floating prompt bar at the bottom of the document (see buildAiPanel).
+  function mkAiAssistant() {
+    ui.aiBtn = el('button', {
+      class: 'doc-btn doc-ai-btn', type: 'button',
+      'data-tip': 'AI Assistant', 'aria-label': 'AI Assistant', 'aria-pressed': 'false',
+      onClick: () => toggleAiPanel(),
+    }, [
+      el('span', { class: 'doc-ai-btn__ico', html: renderIcon('sparkle') }),
+      el('span', { class: 'doc-ai-btn__txt' }, 'AI Assistant'),
+    ]);
+    return ui.aiBtn;
+  }
+
   /* ------------------------------ AI Assistant ------------------------------ */
-  // A permanent compact chat bar floated at the bottom of the editor (no top toggle).
-  // The conversation + quick actions live in a popover that opens ABOVE the bar; the
-  // `+` button toggles it and the bar's `✕` collapses it back to just the bar.
-  const showAiPop = () => ui.aiPop?.classList.add('is-visible');
-  const hideAiPop = () => ui.aiPop?.classList.remove('is-visible');
-  const toggleAiPop = () => { if (ui.aiPop?.classList.contains('is-visible')) hideAiPop(); else { showAiPop(); ui.aiInput?.focus(); } };
+  // A ChatGPT/Copilot-style assistant: a fixed right SIDEBAR holds the whole
+  // conversation + tools (it's a flex child of .doc-body, so the document canvas
+  // resizes to make room — it never overlaps the page), and a small floating
+  // prompt bar at the bottom carries the input + suggestion chips. Both are driven
+  // by one `is-ai-open` state class on the workspace root for a coordinated,
+  // animated open/close. Built lazily on first open and reused thereafter.
+  function toggleAiPanel() {
+    if (!ui.aiPanel) buildAiPanel();
+    const open = !root.classList.contains('is-ai-open');
+    root.classList.toggle('is-ai-open', open);
+    // Clicking the button only shows the prompt bar; the sidebar reveals itself once
+    // a conversation exists (or stays if one already does).
+    if (open && ui.aiMsgs && ui.aiMsgs.querySelector('.doc-ai__msg')) root.classList.add('is-ai-chat');
+    ui.aiBtn?.setAttribute('aria-pressed', open ? 'true' : 'false');
+    ui.aiBtn?.classList.toggle('is-on', open);
+    if (open) requestAnimationFrame(() => ui.aiInput?.focus());
+  }
+  function closeAiPanel() {
+    root.classList.remove('is-ai-open', 'is-ai-chat');
+    ui.aiBtn?.setAttribute('aria-pressed', 'false');
+    ui.aiBtn?.classList.remove('is-on');
+  }
+  // Collapse just the conversation sidebar (keeps the prompt bar open).
+  function closeChat() { root.classList.remove('is-ai-chat'); }
 
   function buildAiPanel() {
     const msgs = el('div', { class: 'doc-ai__msgs', role: 'log', 'aria-live': 'polite' });
     ui.aiMsgs = msgs;
+    // Each bubble has a text body; AI bubbles also get an "Insert into document"
+    // button (revealed only for real, insertable replies). Returns a handle whose
+    // setText(text, insertable) fills the reply and shows/hides that button.
     const addMsg = (who, text) => {
-      const bubble = el('div', { class: `doc-ai__msg doc-ai__msg--${who}` }, text);
+      const body = el('div', { class: 'doc-ai__msg-text' }, text);
+      const children = [body];
+      let insertBtn = null;
+      if (who === 'ai') {
+        insertBtn = el('button', {
+          class: 'doc-ai__insert', type: 'button', hidden: true,
+          onClick: () => insertIntoDoc(body.textContent || ''),
+        }, 'Insert into document');
+        children.push(insertBtn);
+      }
+      const bubble = el('div', { class: `doc-ai__msg doc-ai__msg--${who}` }, children);
+      ui.aiEmpty?.remove(); ui.aiEmpty = null; // drop the empty-state hint on first message
       msgs.appendChild(bubble);
       msgs.scrollTop = msgs.scrollHeight;
-      showAiPop(); // reveal the popover once there's a conversation
-      return bubble;
+      root.classList.add('is-ai-chat'); // a task/message reveals the conversation sidebar
+      return {
+        el: bubble,
+        setText(t, insertable) {
+          body.textContent = t;
+          if (insertBtn) insertBtn.hidden = !insertable;
+          msgs.scrollTop = msgs.scrollHeight;
+        },
+      };
     };
-
-    // Quick actions prefill the prompt so a single click sends a common request.
-    const chips = ['Summarize the document', 'Improve the writing', 'Fix spelling & grammar', 'Make it shorter', 'Continue writing']
-      .map((label) => el('button', {
-        class: 'doc-ai__chip', type: 'button',
-        onClick: () => { ui.aiInput.value = label; ui.aiInput.focus(); submit(); },
-      }, label));
 
     const input = el('textarea', {
       class: 'doc-ai__input', rows: '1', placeholder: 'Ask the AI to help with your document…',
       'aria-label': 'Message the AI Assistant',
       onKeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } },
-      onInput: (e) => { e.target.style.height = 'auto'; e.target.style.height = `${Math.min(120, e.target.scrollHeight)}px`; },
+      onInput: (e) => { e.target.style.height = 'auto'; e.target.style.height = `${Math.min(180, e.target.scrollHeight)}px`; },
     });
     ui.aiInput = input;
     const sendBtn = el('button', {
@@ -252,60 +300,762 @@ export function createDocumentWorkspace({ bus, store, services }) {
     function docText() {
       try { return documentToText(editor.getModel()).replace(/\n{2,}/g, '\n').trim(); } catch { return ''; }
     }
-    // Local, no-cloud responses for the deterministic asks (the app is client-first,
-    // with no API keys); anything else gets a clear, honest reply instead of a fake
-    // answer. Emits `doc:ai-request` on the bus so a model can be wired in later.
-    function respond(prompt) {
+    // Deterministic asks (word/character count, reading time) are answered locally
+    // and instantly — no network round-trip. Returns null when the ask needs the
+    // model. Empty-doc guidance stays local too.
+    function localAnswer(prompt) {
       const text = docText();
-      const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
-      const chars = text.length;
       const p = prompt.toLowerCase();
-      if (!text) return 'Your document is empty — add some text and I can help summarise or refine it.';
       if (/\b(word|character|char|count|how many|length|reading time)\b/.test(p)) {
+        if (!text) return 'Your document is empty — add some text first.';
+        const words = text.split(/\s+/).filter(Boolean).length;
+        const chars = text.length;
         const mins = Math.max(1, Math.round(words / 200));
         return `Your document has ${words.toLocaleString()} words and ${chars.toLocaleString()} characters — about a ${mins}-minute read.`;
       }
-      return `AI Assistant isn't connected to a language model yet, so I can't ${prompt.replace(/[.!?]+$/, '')} for you here. I can already report word/character count and reading time. (This panel emits a "doc:ai-request" event, ready to wire to a model.)`;
+      return null;
+    }
+
+    // Ask the server-side proxy (/api/ai/chat), which holds the API key and calls
+    // the configured model. The key never touches the browser. `contextText` lets a
+    // caller override the document context (e.g. '' for fresh generation/edits).
+    async function askModel(prompt, contextText, image) {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, text: contextText != null ? contextText : docText(), image: image || null }),
+      });
+      let data = null;
+      try { data = await res.json(); } catch { /* non-JSON error body */ }
+      if (!res.ok) throw new Error(data?.error || `Request failed (${res.status}).`);
+      return data?.reply || 'The model returned an empty response.';
+    }
+
+    // Upload a document/form image → the multimodal model reads it and rebuilds the
+    // content as EDITABLE text/fields/tables in the page (headings, labels, blanks
+    // as "____", markdown tables). Honest caveat: this recreates the CONTENT and
+    // structure, not a pixel-perfect image of the original.
+    function importImage(file) {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const dataUrl = String(reader.result || '');
+        const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
+        if (!m) { addMsg('ai', 'Sorry — I couldn’t read that image.'); return; }
+        addMsg('user', `🖼 ${file.name} — recreate as an editable form`);
+        const thinking = addMsg('ai', 'Reading the document…');
+        const modelPrompt = [
+          'Recreate the document/form in this image as clean, EDITABLE content.',
+          "Use markdown '#'/'##' for the title and section headings.",
+          'Keep every field LABEL and its value; render empty fields as "Label: ____".',
+          'Reproduce any tables as markdown tables. Preserve the wording and order.',
+          'Output ONLY the recreated content — no preamble or explanation.',
+        ].join(' ');
+        try {
+          const reply = await askModel(modelPrompt, '', { mimeType: m[1], data: m[2] });
+          insertIntoDoc(reply);
+          thinking.setText('✓ Recreated the document as editable content on the page.', false);
+        } catch (err) {
+          thinking.setText(`Sorry — I couldn't read the document. ${err?.message || ''}`.trim(), false);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    const DEFAULT_PH = 'Ask the AI to help with your document…';
+    // The block elements the AI last WROTE into the page. Follow-up modification
+    // requests (shorten / expand / rewrite / translate / tone / grammar …) replace
+    // THESE in place — conversational refine — rather than inserting a new copy.
+    // Reset only when the blocks are gone or the user asks for a brand-new insert.
+    let lastAiBlocks = null;
+    const lastAiLive = () => Array.isArray(lastAiBlocks) && lastAiBlocks.some((el) => el && el.isConnected);
+    // Read the current text of the last-written blocks back as light markdown (so the
+    // model sees the up-to-date content, incl. manual edits, with heading structure).
+    function blocksToText(els) {
+      return (els || []).filter((el) => el && el.isConnected).map((el) => {
+        const tag = (el.tagName || '').toLowerCase();
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (tag === 'h1') return `# ${text}`;
+        if (tag === 'h2') return `## ${text}`;
+        if (tag === 'h3') return `### ${text}`;
+        return text;
+      }).join('\n\n');
+    }
+
+    // Last non-collapsed selection made INSIDE the editor page. Kept up to date so
+    // that when the user then types an instruction in the bar, we can edit exactly
+    // that part of the page in place. Interacting with the bar doesn't clear it.
+    let editSel = null;
+    document.addEventListener('selectionchange', () => {
+      const pageEl = editor && editor.element;
+      if (!pageEl) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const r = sel.getRangeAt(0);
+      const inPage = pageEl.contains(r.commonAncestorContainer);
+      if (inPage && !sel.isCollapsed) { editSel = { range: r.cloneRange(), text: sel.toString() }; }
+      else if (inPage && sel.isCollapsed) { editSel = null; if (!selbarSticky) hideSelbar(); } // clicked away → no target
+      if (ui.aiInput) ui.aiInput.placeholder = editSel ? 'Edit the selected text — e.g. “make it formal”' : DEFAULT_PH;
+    });
+
+    // Replace the captured editor selection with the reply, in place on the page.
+    // Uses rich block replacement so a multi-paragraph rewrite becomes real
+    // paragraphs (and keeps any bold/italic), as one undoable edit. Returns the
+    // affected block element(s) so a follow-up refine targets the SAME part.
+    function replaceSelection(newText) {
+      if (!editSel || !editor) return null;
+      try {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(editSel.range);
+        return editor.replaceSelectionWithBlocks(textToBlocks((newText || '').trim()));
+      } catch { return null; }
+      finally { editSel = null; if (ui.aiInput) ui.aiInput.placeholder = DEFAULT_PH; }
+    }
+
+    // ---- Floating "Edit with AI" toolbar (smart selection) ----
+    // Select text in the page → a small pill appears right above the selection. Type
+    // an instruction ("make it formal", "change this to…") → the selected text is
+    // rewritten IN PLACE. This is the discoverable version of selection editing.
+    let selbarSticky = false; // once focused, don't auto-hide when the highlight is lost
+    const selInput = el('input', {
+      class: 'doc-ai-sel__input', type: 'text', 'aria-label': 'Edit the selected text with AI',
+      placeholder: 'Change this to… (e.g. make it formal)',
+      onKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); submitSel(); } else if (e.key === 'Escape') { hideSelbar(); } },
+    });
+    const selbar = el('div', { class: 'doc-ai-selbar', role: 'toolbar', 'aria-label': 'Edit selection with AI' }, [
+      el('span', { class: 'doc-ai-sel__ico', html: renderIcon('sparkle') }),
+      selInput,
+      el('button', { class: 'doc-ai-sel__send', type: 'button', 'data-tip': 'Edit with AI', 'aria-label': 'Apply edit', onClick: () => submitSel() }, el('span', { html: renderIcon('sparkle') })),
+    ]);
+    // Clicking the pill (except the input) must NOT steal the page selection.
+    selbar.addEventListener('mousedown', (e) => { if (e.target !== selInput) e.preventDefault(); });
+    selInput.addEventListener('focus', () => { selbarSticky = true; drawSelHighlight(); });
+    ui.aiSelbar = selbar;
+    document.body.appendChild(selbar);
+    // A persistent highlight painted over the selection: focusing the input drops the
+    // native selection colour, so we draw our own so the user still sees what's being
+    // edited. Pointer-events:none, sits just under the pill.
+    const selHi = el('div', { class: 'doc-ai-selhi', 'aria-hidden': 'true' });
+    document.body.appendChild(selHi);
+    function drawSelHighlight() {
+      selHi.replaceChildren();
+      if (!selbar.classList.contains('is-open') || !editSel || !editSel.range) return;
+      let rects; try { rects = editSel.range.getClientRects(); } catch { return; }
+      for (const r of rects) {
+        if (!r.width || !r.height) continue;
+        selHi.appendChild(el('div', { class: 'doc-ai-selhi__box', style: `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px` }));
+      }
+    }
+
+    function hideSelbar() { selbar.classList.remove('is-open'); selInput.value = ''; selbarSticky = false; selHi.replaceChildren(); }
+    function positionSelbar() {
+      if (!editSel || !editSel.range) { hideSelbar(); return; }
+      let rect;
+      try { rect = editSel.range.getBoundingClientRect(); } catch { hideSelbar(); return; }
+      if (!rect || (!rect.width && !rect.height)) { hideSelbar(); return; }
+      selbar.style.visibility = 'hidden'; selbar.classList.add('is-open');
+      const bw = selbar.offsetWidth; const bh = selbar.offsetHeight;
+      let top = rect.top - bh - 8; if (top < 8) top = rect.bottom + 8;
+      let left = rect.left + rect.width / 2 - bw / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - bw - 8));
+      selbar.style.top = `${Math.round(top)}px`; selbar.style.left = `${Math.round(left)}px`;
+      selbar.style.visibility = 'visible';
+      drawSelHighlight();
+    }
+    // Reveal the pill once a selection settles (mouseup / shift-key selection).
+    const maybeShowSelbar = () => { setTimeout(() => { if (editSel && editSel.text) positionSelbar(); else if (!selbarSticky) hideSelbar(); }, 0); };
+    document.addEventListener('mouseup', (e) => { if (!selbar.contains(e.target)) maybeShowSelbar(); });
+    // Clicking anywhere outside the pill dismisses it (even after the input was
+    // focused / made sticky) — e.g. you selected by accident and changed your mind.
+    document.addEventListener('mousedown', (e) => { if (selbar.classList.contains('is-open') && !selbar.contains(e.target)) hideSelbar(); });
+    document.addEventListener('keyup', (e) => { if (e.shiftKey || /Arrow/.test(e.key)) maybeShowSelbar(); });
+    // Keep it glued to the selection while scrolling (or hide if the user isn't editing).
+    const hostScroll = editor && editor.element ? editor.element.closest('.doc-host') : null;
+    (hostScroll || window).addEventListener('scroll', () => { if (!selbar.classList.contains('is-open')) return; if (selbarSticky) positionSelbar(); else hideSelbar(); }, true);
+
+    // Apply the instruction to the captured selection, in place (a plain, non-agent
+    // rewrite so the result is always clean prose — never JSON/markdown).
+    async function submitSel() {
+      const instr = (selInput.value || '').trim();
+      if (!instr || !editSel || !editSel.text) return;
+      const target = editSel.text;
+      selInput.value = ''; selInput.disabled = true;
+      try {
+        const modelPrompt = `Rewrite the text below according to this instruction: "${instr}". Return ONLY the rewritten text as clean plain text — no markdown, no LaTeX, no JSON, no quotes, no explanation.\n\nText:\n${target}`;
+        const reply = await askModel(modelPrompt, '');
+        const els = replaceSelection(reply); // restores the range + replaces in place
+        if (els && els.length) lastAiBlocks = els; // a follow-up "make it shorter" refines this
+      } catch { /* leave the selection so the user can retry */ }
+      finally { selInput.disabled = false; hideSelbar(); }
+    }
+
+    // ---- DocMaster AI editing agent ----
+    // Instead of chatting, the model returns a JSON list of ACTIONS (create /
+    // replace / delete / format sections, tables, lists…) which we execute on the
+    // live page. A short conversation history is kept so edits are multi-turn /
+    // conversational (a "make it shorter" follow-up refers to the previous turn).
+    const history = [];
+    function pushHistory(role, text) {
+      const t = (text || '').trim();
+      if (!t) return;
+      history.push({ role, text: t });
+      if (history.length > 16) history.splice(0, history.length - 16);
+    }
+
+    // Ask the agent endpoint. Returns { actions } (structured edits) or { reply }
+    // (plain text, when the model didn't produce JSON — we degrade gracefully).
+    async function askAgent(prompt) {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'agent',
+          prompt,
+          text: docText(),
+          selection: (editSel && editSel.text) || '',
+          history: history.slice(-8),
+        }),
+      });
+      let data = null;
+      try { data = await res.json(); } catch { /* non-JSON error body */ }
+      if (!res.ok) throw new Error(data?.error || `Request failed (${res.status}).`);
+      return data || {};
+    }
+
+    // A reply that is really a JSON action blob (e.g. the model ignored the schema
+    // wrapper, or a truncated action list slipped through) must NEVER be inserted as
+    // text. Detect it, and try to salvage real actions from it (string-aware scan).
+    // Detect a JSON action blob leaking through as a plain reply. Deliberately does
+    // NOT treat a leading "[" as JSON — letters legitimately start with "[Your Name]".
+    // Requires an object start or an explicit "action":"…" field.
+    const looksLikeJson = (s) => /^\s*\{\s*"/.test(s || '') || /"action"\s*:\s*"/.test(s || '');
+    function extractActionsFromText(raw) {
+      if (!raw) return null;
+      let s = String(raw).trim();
+      const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(s);
+      if (fence) s = fence[1].trim();
+      let val = null;
+      try { val = JSON.parse(s); } catch { /* try a balanced, string-aware slice */ }
+      if (!val) {
+        const start = s.search(/[[{]/);
+        if (start < 0) return null;
+        const open = s[start]; const close = open === '{' ? '}' : ']';
+        let depth = 0; let inStr = false; let esc = false;
+        for (let i = start; i < s.length; i += 1) {
+          const ch = s[i];
+          if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+          if (ch === '"') { inStr = true; continue; }
+          if (ch === open) depth += 1;
+          else if (ch === close) { depth -= 1; if (depth === 0) { try { val = JSON.parse(s.slice(start, i + 1)); } catch { val = null; } break; } }
+        }
+      }
+      if (!val) return null;
+      const list = Array.isArray(val) ? val : Array.isArray(val.actions) ? val.actions : (val.action ? [val] : null);
+      return list && list.filter((a) => a && typeof a.action === 'string');
+    }
+
+    /* ---- action executor: apply the model's JSON actions to the page ---- */
+    const headingLevel = (elx) => {
+      const t = (elx && elx.tagName || '').toLowerCase();
+      return t === 'h1' ? 1 : t === 'h2' ? 2 : t === 'h3' ? 3 : 0;
+    };
+    const normText = (elx) => (elx.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const lastBlockEl = () => { const e = editor.getBlockEls ? editor.getBlockEls() : []; return e.length ? e[e.length - 1] : null; };
+
+    // Find the block elements that make up a named section: the matching heading
+    // plus the following blocks up to the next heading of the same-or-higher level.
+    // A non-heading match returns just that one block. Case-insensitive; falls back
+    // to a substring match so "Scene 3" finds "Scene 3: The rooftop".
+    function findSectionEls(name) {
+      if (!name || !editor.getBlockEls) return null;
+      const els = editor.getBlockEls();
+      const want = String(name).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!want) return null;
+      let idx = els.findIndex((e) => normText(e) === want);
+      if (idx < 0) idx = els.findIndex((e) => normText(e).includes(want));
+      if (idx < 0) return null;
+      const start = els[idx];
+      const level = headingLevel(start);
+      if (!level) return [start];
+      const out = [start];
+      for (let i = idx + 1; i < els.length; i += 1) {
+        const l = headingLevel(els[i]);
+        if (l && l <= level) break; // next same/higher heading ends the section
+        out.push(els[i]);
+      }
+      return out;
+    }
+
+    // Select a run of block elements (so selection-based editor commands can act on
+    // a whole section for format_text).
+    function selectEls(els) {
+      const live = (els || []).filter((e) => e && e.isConnected);
+      if (!live.length) return false;
+      try {
+        const range = document.createRange();
+        range.setStartBefore(live[0]);
+        range.setEndAfter(live[live.length - 1]);
+        const sel = window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        return true;
+      } catch { return false; }
+    }
+
+    // Build a table block from { headers, rows }. The header row is bold.
+    function tableBlockFrom(headers, rows) {
+      const body = [];
+      const head = Array.isArray(headers) ? headers.map((h) => String(h == null ? '' : h)) : [];
+      if (head.length) body.push({ cells: head, header: true });
+      (Array.isArray(rows) ? rows : []).forEach((r) => {
+        body.push({ cells: (Array.isArray(r) ? r : [r]).map((c) => String(c == null ? '' : c)), header: false });
+      });
+      if (!body.length) return null;
+      const nCols = Math.max(...body.map((r) => r.cells.length), 1);
+      const tbl = createTableBlock(body.length, nCols);
+      body.forEach((r, ri) => {
+        for (let ci = 0; ci < nCols; ci += 1) {
+          // Clean each cell too (LaTeX / fences / stray markup), like paragraph text.
+          const val = cleanInline(r.cells[ci] != null ? r.cells[ci] : '');
+          tbl.rows[ri][ci] = { runs: r.header ? [createRun(stripStray(val), { bold: true })] : parseInline(val) };
+        }
+      });
+      return tbl;
+    }
+
+    function listBlockFrom(items, ordered) {
+      const list = (Array.isArray(items) ? items : []).map((t) => String(t == null ? '' : t)).filter((t) => t.trim());
+      if (!list.length) return null;
+      return createListBlock({ ordered: !!ordered, items: list.map((t) => ({ runs: parseInline(cleanInline(t).replace(/^\s*[-*•]\s+|^\s*\d+[.)]\s+/, '')) })) });
+    }
+
+    // Apply one format spec to the current selection or a named section.
+    function applyFormat(target, fmt) {
+      fmt = fmt || {};
+      let ok = false;
+      if (target && target !== 'selection' && target !== 'cursor') {
+        const sec = findSectionEls(target);
+        ok = sec ? selectEls(sec) : false;
+      } else if (editSel && editSel.range) {
+        try { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(editSel.range); ok = !!editSel.text; } catch { ok = false; }
+      }
+      if (!ok) return false;
+      let did = false;
+      if (fmt.bold) { editor.toggleMark('bold'); did = true; }
+      if (fmt.italic) { editor.toggleMark('italic'); did = true; }
+      if (fmt.underline) { editor.toggleMark('underline'); did = true; }
+      if (fmt.align) { editor.setAlign(fmt.align); did = true; }
+      if (fmt.heading) { editor.setBlockTag(`h${Math.min(3, Math.max(1, parseInt(fmt.heading, 10) || 1))}`); did = true; }
+      if (fmt.list) { editor.insertList(fmt.list === 'number' || fmt.list === 'ordered' || fmt.list === 'numbered'); did = true; }
+      return did;
+    }
+
+    // Execute a single action; returns a short human summary (or null if it was a
+    // no-op). Updates `lastAiBlocks` so a follow-up refine targets what changed.
+    function applyAction(a) {
+      const action = a && a.action;
+      const content = typeof a.content === 'string' ? a.content : '';
+      const target = typeof a.target === 'string' ? a.target : '';
+      const remember = (els) => { if (els && els.length) lastAiBlocks = els; return els; };
+      switch (action) {
+        case 'insert_text': {
+          const blocks = textToBlocks(content);
+          if (!blocks.length) return null;
+          remember(target === 'end' ? editor.insertBlocksRelative(blocks, lastBlockEl(), 'after') : editor.insertBlocks(blocks));
+          return 'Added the content to your document.';
+        }
+        case 'summarize': {
+          const blocks = textToBlocks(content);
+          if (!blocks.length) return null;
+          if (target && target !== 'cursor' && target !== 'end') {
+            const sec = findSectionEls(target);
+            if (sec) { remember(editor.insertBlocksRelative(blocks, sec[sec.length - 1], 'after')); return `Added a summary after “${target}”.`; }
+          }
+          remember(target === 'cursor' ? editor.insertBlocks(blocks) : editor.insertBlocksRelative(blocks, lastBlockEl(), 'after'));
+          return 'Added a summary.';
+        }
+        case 'replace_selection': {
+          const blocks = textToBlocks(content);
+          if (!blocks.length) return null;
+          const els = replaceSelection(content);
+          if (els && els.length) { lastAiBlocks = els; return 'Replaced the selected text.'; }
+          remember(editor.insertBlocks(blocks));
+          return 'Inserted the text.';
+        }
+        case 'replace_section': {
+          const blocks = textToBlocks(content);
+          if (!blocks.length) return null;
+          const sec = findSectionEls(target);
+          if (sec) { const els = editor.replaceBlocks(sec, blocks); if (els && els.length) { lastAiBlocks = els; return `Rewrote “${target}”.`; } }
+          remember(editor.insertBlocks(blocks));
+          return sec ? 'Updated the section.' : `Couldn’t find “${target}” — added the content instead.`;
+        }
+        case 'delete_section': {
+          const sec = findSectionEls(target);
+          if (sec && editor.removeBlocks(sec)) {
+            if (lastAiBlocks && lastAiBlocks.some((e) => sec.includes(e))) lastAiBlocks = null;
+            return `Deleted “${target}”.`;
+          }
+          return `Couldn’t find a section called “${target}”.`;
+        }
+        case 'insert_after':
+        case 'insert_before': {
+          const blocks = textToBlocks(content);
+          if (!blocks.length) return null;
+          const where = action === 'insert_before' ? 'before' : 'after';
+          const sec = findSectionEls(target);
+          const ref = sec ? (where === 'before' ? sec[0] : sec[sec.length - 1]) : null;
+          remember(editor.insertBlocksRelative(blocks, ref, where));
+          return sec ? `Inserted content ${where} “${target}”.` : 'Added the content to your document.';
+        }
+        case 'replace_all': {
+          const blocks = textToBlocks(content);
+          if (!blocks.length) return null;
+          const all = editor.getBlockEls();
+          remember(all.length ? editor.replaceBlocks(all, blocks) : editor.insertBlocks(blocks));
+          return 'Rewrote the document.';
+        }
+        case 'create_table': {
+          const tbl = tableBlockFrom(a.headers, a.rows);
+          if (!tbl) return null;
+          remember(editor.insertBlocks([tbl]));
+          return 'Inserted a table.';
+        }
+        case 'create_heading': {
+          const lvl = Math.min(3, Math.max(1, parseInt(a.level, 10) || 2));
+          remember(editor.insertBlocks([createParagraph({ tag: `h${lvl}`, runs: parseInline(cleanInline(content)) })]));
+          return 'Added a heading.';
+        }
+        case 'create_list': {
+          const list = listBlockFrom(a.items, a.ordered);
+          if (!list) return null;
+          remember(editor.insertBlocks([list]));
+          return 'Inserted a list.';
+        }
+        case 'format_text':
+          return applyFormat(a.target, a.format) ? 'Updated the formatting.' : null;
+        default:
+          return null;
+      }
+    }
+
+    // Run a list of actions in order; collect confirmations + any 'chat' reply.
+    function applyActions(actions) {
+      const summaries = [];
+      let chatReply = null;
+      for (const a of actions) {
+        if (a && a.action === 'chat') { chatReply = typeof a.content === 'string' ? a.content : ''; continue; }
+        try { const s = applyAction(a); if (s) summaries.push(s); } catch { /* skip a malformed action */ }
+      }
+      return { summaries, chatReply };
+    }
+
+    // Fallback intent for when the model returns plain text (no JSON actions): a
+    // "write/make/create…" request writes into the page; anything else is chat.
+    const WRITE_INTENT = /^\s*(write|draft|compose|create|generate|make|produce|prepare|give me|add|insert|summari[sz]e|list|outline)\b/i;
+
+    // ---- conversational refine of the LAST AI output ("improve that part") ----
+    // A brand-new generation (starts with write/create/…): NOT a refine.
+    const FRESH_INTENT = /^\s*(write|draft|compose|create|generate|make me|produce|prepare|give me|add (a|an|another)|insert (a|an)|new (doc|document|essay|article|letter|paragraph|section|version|table|list))\b/i;
+    // A modify/improve instruction.
+    const REFINE_INTENT = /\b(improve|enhance|better|rewrite|re-?word|rephrase|revise|redo|shorten|shorter|lengthen|longer|expand|elaborate|simplif|clarif|polish|proofread|condense|summari[sz]e|make it|more (detail|formal|casual|professional|concise)|less (detail|formal)|professional|concise|formal|casual|translate|fix)\b/i;
+    // Refers to the thing just written (pronoun), not a named part. "the whole
+    // document/doc" is deliberately EXCLUDED — that's an explicit replace_all for the
+    // agent, not a refine of the last snippet.
+    const refersToLast = (s) => /\b(this|that|it|these|those|the (above|last|previous)|that (part|section|paragraph|text|one|bit))\b/i.test(s);
+    // Names a specific structural part → let the agent target it (replace_section) instead.
+    const namesPart = (s) => /\b(introduction|intro|conclusion|abstract|section|sub-?heading|heading|title|paragraph|table|bullet list|numbered list|scene\s*\d|slide\s*\d|chapter\s*\d)\b/i.test(s);
+    // True when the AI's last output IS essentially the whole document (so a bare
+    // "improve"/"make it better" can refine the whole thing in place).
+    function lastCoversWholeDoc() {
+      if (!lastAiLive()) return false;
+      const all = editor.getBlockEls ? editor.getBlockEls() : [];
+      return all.filter((b) => (b.textContent || '').trim() && !lastAiBlocks.includes(b)).length === 0;
+    }
+
+    // Rewrite the last AI-written block(s) IN PLACE: delete them and drop in the
+    // revised version — the "improve that part" flow. Uses a plain (non-agent) call
+    // so the reply is clean prose; the block cleaner strips any stray markup.
+    async function runRefine(display, thinking) {
+      const current = blocksToText(lastAiBlocks);
+      const modelPrompt = [
+        `Revise the text below according to this instruction: "${display}".`,
+        'Return ONLY the revised version as clean text. Keep #/##/### heading lines where appropriate.',
+        'No markdown symbols beyond those headings, no LaTeX, no JSON, no code fences, no explanation.',
+        '', 'Text:', current,
+      ].join('\n');
+      const reply = await askModel(modelPrompt, '');
+      const blocks = textToBlocks(reply);
+      const newEls = blocks.length ? editor.replaceBlocks(lastAiBlocks, blocks) : null;
+      if (newEls && newEls.length) { lastAiBlocks = newEls; thinking.setText('✓ Updated that part.', false); }
+      else { const els = insertIntoDoc(reply); thinking.setText(els ? '✓ Written into your document.' : 'Sorry — I could not apply that change.', false); }
+      pushHistory('user', display); pushHistory('assistant', 'Revised that part.');
+    }
+
+    // One code path for every typed message: send it to the agent and execute the
+    // JSON actions it returns (create/edit/delete/format…). Local deterministic
+    // asks (word count) still answer instantly. Multi-turn: each turn is recorded.
+    async function runAgent(display) {
+      addMsg('user', display);
+      input.value = ''; input.style.height = 'auto';
+      try { bus?.emit?.('doc:ai-request', { prompt: display, text: docText() }); } catch { /* optional bus */ }
+
+      const local = localAnswer(display);
+      if (local != null) {
+        const t = addMsg('ai', '…');
+        setTimeout(() => t.setText(local, false), 150);
+        pushHistory('user', display); pushHistory('assistant', local);
+        return;
+      }
+
+      const hadSelection = !!(editSel && editSel.text);
+      // "improve/rewrite/shorten … that part/it" with NO selection but a live last-AI
+      // block → refine THAT block in place (auto-delete + refill), not a new copy.
+      const wantRefine = !hadSelection && lastAiLive() && REFINE_INTENT.test(display)
+        && !FRESH_INTENT.test(display) && !namesPart(display)
+        && !/\b(whole|entire|full)\b/i.test(display) // explicit whole-doc → agent replace_all
+        && (refersToLast(display) || lastCoversWholeDoc());
+
+      const thinking = addMsg('ai', '…');
+      try {
+        if (wantRefine) { await runRefine(display, thinking); return; }
+        const data = await askAgent(display);
+        // The server flags a truncated/unparseable action reply — show a friendly
+        // retry, never dump raw JSON into the document.
+        if (data.incomplete || (data.error && !data.reply && !data.actions)) {
+          thinking.setText(data.error || 'The AI response was incomplete — please try again.', false);
+          return;
+        }
+        let actions = Array.isArray(data.actions) && data.actions.length ? data.actions : null;
+        const reply = data.reply || '';
+        // Defense in depth: if the plain reply is actually a JSON action blob, parse
+        // it here rather than inserting the JSON text.
+        if (!actions && looksLikeJson(reply)) {
+          const salvaged = extractActionsFromText(reply);
+          if (salvaged && salvaged.length) actions = salvaged;
+          else { thinking.setText('The AI response was incomplete — please try again.', false); return; }
+        }
+        if (actions) {
+          const { summaries, chatReply } = applyActions(actions);
+          const msg = chatReply || (summaries.length ? `✓ ${summaries.join(' ')}` : 'Done.');
+          thinking.setText(msg, false);
+          pushHistory('user', display); pushHistory('assistant', msg);
+        } else {
+          // No structured actions — degrade gracefully using the plain reply. (Guarded
+          // above so this is never raw JSON.)
+          if (hadSelection) {
+            const els = replaceSelection(reply);
+            if (els && els.length) { lastAiBlocks = els; thinking.setText('✓ Replaced the selected text.', false); }
+            else thinking.setText(reply, true);
+          } else if (WRITE_INTENT.test(display)) {
+            insertIntoDoc(reply);
+            thinking.setText('✓ Written into your document.', false);
+          } else {
+            thinking.setText(reply, true);
+          }
+          pushHistory('user', display); pushHistory('assistant', reply);
+        }
+      } catch (err) {
+        thinking.setText(`Sorry — I couldn't reach the AI service. ${err?.message || ''}`.trim(), false);
+      }
     }
 
     function submit() {
       const prompt = (input.value || '').trim();
       if (!prompt) return;
-      addMsg('user', prompt);
-      input.value = ''; input.style.height = 'auto';
-      try { bus?.emit?.('doc:ai-request', { prompt, text: docText() }); } catch { /* optional bus */ }
-      const thinking = addMsg('ai', '…');
-      // Small delay so the exchange reads like a conversation.
-      setTimeout(() => { thinking.textContent = respond(prompt); ui.aiMsgs.scrollTop = ui.aiMsgs.scrollHeight; }, 250);
+      runAgent(prompt);
     }
 
-    // Compact popover (messages + chips) that opens ABOVE the bar. Hidden at rest —
-    // revealed on focus / by the `+` button / when a message arrives; collapsed by ✕.
-    const pop = el('div', { class: 'doc-ai-pop' }, [msgs, el('div', { class: 'doc-ai__chips' }, chips)]);
-    ui.aiPop = pop;
-    input.addEventListener('focus', () => showAiPop());
-    // Clicking away collapses an EMPTY popover (just chips); a real conversation stays
-    // until the user dismisses it with ✕.
-    input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input && !msgs.childElementCount) hideAiPop(); }, 150));
+    // Quick task chips: click a type, and (with a topic in the bar) it generates and
+    // writes straight into the page; with no topic it primes the bar for one.
+    const TASKS = [
+      { label: 'Letter', kind: 'a formal letter' },
+      { label: 'Article', kind: 'an article' },
+      { label: 'Essay', kind: 'an essay' },
+      { label: 'Movie script', kind: 'a movie script (with scene headings and dialogue)' },
+      { label: 'Presentation', kind: 'a slide-by-slide presentation outline (use a heading per slide)' },
+    ];
+    function runTask(t) {
+      const topic = (input.value || '').trim();
+      if (!topic) { input.value = `Write ${t.kind} about `; input.focus(); input.dispatchEvent(new Event('input')); return; }
+      runAgent(`Write ${t.kind} about: ${topic}`);
+    }
 
-    // The small floating chat bar (Gemini-style pill): `+` · input · send · ✕.
-    // `+` is the entry point for "what the AI can do" (currently the quick actions).
-    const plusBtn = el('button', {
-      class: 'doc-ai-bar__plus', type: 'button', 'aria-label': 'AI actions',
-      'data-tip': 'AI actions', onClick: () => toggleAiPop(),
+    // Turn an AI reply into paragraph blocks and write them into the page at the
+    // caret as a single undoable edit (keeps the rest of the doc + undo history).
+    // Remembers the inserted blocks as `lastAiBlocks` so a follow-up "make it
+    // shorter" refines THEM instead of adding a second copy.
+    function insertIntoDoc(text) {
+      const clean = (text || '').trim();
+      if (!clean || !editor) return null;
+      const blocks = textToBlocks(clean);
+      if (!blocks.length) return null;
+      const els = editor.insertBlocks(blocks);
+      lastAiBlocks = els && els.length ? els : null;
+      return els;
+    }
+
+    /* ---- content cleanup: the document must read like Word/Docs, never raw markup ---- */
+    const SUP = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾', n: 'ⁿ', i: 'ⁱ' };
+    const SUB = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎' };
+    const toUni = (s, map) => String(s).split('').map((c) => map[c] || c).join('');
+    // Convert a LaTeX-ish math expression to readable plain Unicode (best effort).
+    function convertMath(expr) {
+      let s = String(expr);
+      s = s.replace(/\\text\s*\{([^}]*)\}/g, '$1').replace(/\\mathrm\s*\{([^}]*)\}/g, '$1');
+      s = s.replace(/\\right?arrow|\\to\b/g, '→').replace(/\\Rightarrow/g, '⇒')
+        .replace(/\\times/g, '×').replace(/\\cdot/g, '·').replace(/\\div/g, '÷')
+        .replace(/\\pm/g, '±').replace(/\\approx/g, '≈').replace(/\\neq/g, '≠')
+        .replace(/\\leq/g, '≤').replace(/\\geq/g, '≥').replace(/\\infty/g, '∞')
+        .replace(/\\sqrt/g, '√').replace(/\\sum/g, '∑').replace(/\\int/g, '∫')
+        .replace(/\\alpha/g, 'α').replace(/\\beta/g, 'β').replace(/\\gamma/g, 'γ')
+        .replace(/\\delta/g, 'δ').replace(/\\Delta/g, 'Δ').replace(/\\pi/g, 'π')
+        .replace(/\\lambda/g, 'λ').replace(/\\mu/g, 'μ').replace(/\\sigma/g, 'σ').replace(/\\theta/g, 'θ');
+      s = s.replace(/\^\{([^}]*)\}/g, (m, g) => toUni(g, SUP)).replace(/\^(\w)/g, (m, g) => toUni(g, SUP));
+      s = s.replace(/_\{([^}]*)\}/g, (m, g) => toUni(g, SUB)).replace(/_(\w)/g, (m, g) => toUni(g, SUB));
+      s = s.replace(/\\[a-zA-Z]+/g, '').replace(/[{}]/g, '').replace(/\\[,;:!]/g, ' ').replace(/\\\\/g, ' ');
+      return s.replace(/\s+/g, ' ').trim();
+    }
+    // Strip LaTeX delimiters, code fences and stray markup from a whole block of text.
+    function cleanContent(text) {
+      let s = String(text || '');
+      s = s.replace(/```[a-zA-Z0-9]*\r?\n?/g, '').replace(/```/g, ''); // drop code fences (keep inner text)
+      s = s.replace(/\$\$([\s\S]*?)\$\$/g, (m, g) => convertMath(g)); // block math
+      s = s.replace(/\\\[([\s\S]*?)\\\]/g, (m, g) => convertMath(g)); // \[ ... \]
+      s = s.replace(/\$([^$\n]+?)\$/g, (m, g) => convertMath(g)); // inline math
+      s = s.replace(/\\\(([\s\S]*?)\\\)/g, (m, g) => convertMath(g)); // \( ... \)
+      return s;
+    }
+    // Single-line clean (for table cells, list items, headings): strip LaTeX/fences
+    // and collapse whitespace so no raw markup or newlines leak into a cell/item.
+    const cleanInline = (s) => cleanContent(String(s == null ? '' : s)).replace(/\s+/g, ' ').trim();
+    const isTableRow = (l) => /\|/.test(l) && /^\s*\|?.*\|\s*$/.test(l.trim());
+    const isTableSep = (l) => /^\s*\|?[\s:|-]*-{2,}[\s:|-]*\|?\s*$/.test(l) && /-/.test(l) && /\|/.test(l);
+    const splitRow = (l) => l.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+
+    // Clean AI content → block model. Markdown tables become NATIVE tables; `#`/`##`/
+    // `###` (and a whole-line bold, or "Title:") become headings; LaTeX/fences are
+    // stripped; **bold**/*italic* become marks. Never leaves raw markup in the doc.
+    function textToBlocks(text) {
+      const src = cleanContent(text);
+      const lines = src.split(/\r?\n/);
+      const blocks = [];
+      for (let i = 0; i < lines.length; i += 1) {
+        // A markdown table = a row line followed by a |---|---| separator.
+        if (isTableRow(lines[i]) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+          const header = splitRow(lines[i]);
+          const rows = [];
+          i += 2;
+          while (i < lines.length && isTableRow(lines[i]) && !isTableSep(lines[i])) { rows.push(splitRow(lines[i])); i += 1; }
+          i -= 1; // the for-loop will advance past the last consumed row
+          const tbl = tableBlockFrom(header, rows);
+          if (tbl) blocks.push(tbl);
+          continue;
+        }
+        const line = lines[i].trim();
+        if (!line) continue;
+        let tag = 'p';
+        let content = line;
+        const h = /^(#{1,3})\s+(.*)$/.exec(line);
+        const boldOnly = /^(\*\*|__)([^*_].*?)\1$/.exec(line);
+        if (h) { tag = `h${h[1].length}`; content = h[2]; }
+        else if (/^title:\s*/i.test(line)) { tag = 'h1'; content = line.replace(/^title:\s*/i, ''); }
+        else if (boldOnly && boldOnly[2].length <= 80) { tag = 'h2'; content = boldOnly[2]; }
+        blocks.push(createParagraph({ tag, runs: parseInline(content) }));
+      }
+      return blocks;
+    }
+
+    // Inline markdown → runs: **bold**/__bold__ and *italic*/_italic_ become marks;
+    // any leftover/stray emphasis markers are stripped so they never show as raw text.
+    function parseInline(str) {
+      const runs = [];
+      const re = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3/g;
+      let last = 0; let m;
+      const push = (t, marks) => { const clean = stripStray(t); if (clean) runs.push(createRun(clean, marks)); };
+      while ((m = re.exec(str))) {
+        if (m.index > last) push(str.slice(last, m.index));
+        if (m[2] != null) push(m[2], { bold: true });
+        else push(m[4], { italic: true });
+        last = re.lastIndex;
+      }
+      if (last < str.length) push(str.slice(last));
+      return runs.length ? runs : [createRun(stripStray(str))];
+    }
+    // Remove stray/unpaired markdown emphasis + heading marks so no raw syntax leaks.
+    function stripStray(t) {
+      return String(t).replace(/\*\*|__/g, '').replace(/(^|\s)[*_](?=\S)|(?<=\S)[*_](?=\s|$)/g, '$1').replace(/^#{1,6}\s*/, '');
+    }
+
+    // ---- Right SIDEBAR: the full conversation + tools (a flex child of .doc-body,
+    // so the document resizes and nothing overlaps the page). ----
+    ui.aiEmpty = el('div', { class: 'doc-ai__empty' }, [
+      el('div', { class: 'doc-ai__empty-ico', html: renderIcon('sparkle') }),
+      el('div', { class: 'doc-ai__empty-title' }, 'Ask AI anything'),
+      el('div', { class: 'doc-ai__empty-sub' }, 'Write, edit, or ask about your document. Type below or pick a task.'),
+    ]);
+    msgs.appendChild(ui.aiEmpty);
+    const sidebar = el('aside', { class: 'doc-ai-sidebar', 'aria-label': 'AI Assistant conversation' }, [
+      el('div', { class: 'doc-ai-side__head' }, [
+        el('span', { class: 'doc-ai-side__title' }, [
+          el('span', { class: 'doc-ai-side__title-ico', html: renderIcon('sparkle') }),
+          el('span', {}, 'AI Assistant'),
+        ]),
+        el('div', { class: 'doc-ai-side__tools' }, [
+          el('button', {
+            class: 'doc-ai-side__tool', type: 'button', 'data-tip': 'New chat', 'aria-label': 'New chat',
+            onClick: () => { msgs.replaceChildren(); ui.aiEmpty && msgs.appendChild(ui.aiEmpty); },
+          }, 'New chat'),
+          el('button', {
+            class: 'doc-ai-side__close', type: 'button', 'aria-label': 'Hide conversation',
+            'data-tip': 'Hide', onClick: () => closeChat(),
+          }, '✕'),
+        ]),
+      ]),
+      msgs,
+    ]);
+    ui.aiSidebar = sidebar;
+    ui.docBody.appendChild(sidebar);
+
+    // ---- Bottom PROMPT BAR. Suggestion chips are hidden behind the `+` button;
+    // a `+`(tasks) and an image-upload button sit at the left of the pill. ----
+    const tasks = el('div', { class: 'doc-ai-tasks' },
+      TASKS.map((t) => el('button', { class: 'doc-ai-task', type: 'button', onClick: () => { runTask(t); dock.classList.remove('is-tasks-open'); } }, t.label)));
+
+    const moreBtn = el('button', {
+      class: 'doc-ai-bar__more', type: 'button', 'aria-label': 'Show tasks', 'data-tip': 'Tasks',
+      onClick: () => dock.classList.toggle('is-tasks-open'),
     }, el('span', { html: renderIcon('plus') }));
+
+    // Hidden file input + upload button: pick a form/document image and the model
+    // recreates it as editable content in the page (see importImage).
+    const fileInput = el('input', {
+      type: 'file', accept: 'image/*', class: 'doc-ai-file', 'aria-hidden': 'true',
+      onChange: (e) => { const f = e.target.files && e.target.files[0]; if (f) importImage(f); e.target.value = ''; },
+    });
+    // Image → editable recreation is built but LOCKED for now (flip to false to
+    // enable it in the future — the whole pipeline below stays wired).
+    const IMAGE_LOCKED = true;
+    const uploadBtn = el('button', {
+      class: `doc-ai-bar__upload${IMAGE_LOCKED ? ' is-locked' : ''}`, type: 'button',
+      'aria-label': IMAGE_LOCKED ? 'Upload document image (coming soon)' : 'Upload a document image',
+      'data-tip': IMAGE_LOCKED ? 'Image import — coming soon' : 'Upload image → recreate as editable',
+      'aria-disabled': IMAGE_LOCKED ? 'true' : null,
+      onClick: () => { if (IMAGE_LOCKED) return; fileInput.click(); },
+    }, el('span', { html: renderIcon('image') }));
+
     const bar = el('div', { class: 'doc-ai-bar' }, [
-      plusBtn,
+      moreBtn,
+      uploadBtn,
+      fileInput,
       input,
       sendBtn,
       el('button', {
-        class: 'doc-ai-bar__close', type: 'button', 'aria-label': 'Collapse',
-        'data-tip': 'Collapse', onClick: () => { hideAiPop(); input.blur(); },
+        class: 'doc-ai-bar__close', type: 'button', 'aria-label': 'Close AI Assistant',
+        'data-tip': 'Close', onClick: () => closeAiPanel(),
       }, '✕'),
     ]);
-    const dock = el('div', { class: 'doc-ai-dock', 'aria-label': 'AI Assistant' }, [pop, bar]);
+    const dock = el('div', { class: 'doc-ai-dock', 'aria-label': 'AI prompt' }, [tasks, bar]);
     ui.aiPanel = dock;
-    // Float a compact bar at the bottom-centre of the editor (always visible).
     (ui.docMain || ui.docBody || root).appendChild(dock);
   }
 

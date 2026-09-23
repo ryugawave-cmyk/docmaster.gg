@@ -21,15 +21,22 @@
   <link rel="stylesheet" href="/css/workspace.css?v=<%= assetVersion %>" />
   <link rel="stylesheet" href="/css/app.css?v=<%= assetVersion %>" />
   <link rel="stylesheet" href="/css/blank-editor.css?v=<%= assetVersion %>" />
+  <!-- Auth gate styling (full-screen sign-in panel; reuses the modal button). -->
+  <link rel="stylesheet" href="/css/auth.css?v=<%= assetVersion %>" />
   <%- style %>
 </head>
 <body class="ws-body">
   <%- body %>
 
-  <!-- Only the ESM entry carries ?v=; its relative imports resolve unversioned
-       and stay on revalidate caching, so a deploy can never serve a stale
-       module graph. -->
-  <script type="module" src="/js/app/index.js?v=<%= assetVersion %>"></script>
+  <!-- Editor auth gate. The app module is NOT loaded here directly — the gate
+       loads it only once a Supabase session is confirmed, so the editor is
+       inaccessible without signing in. `defer` preserves order so
+       window.supabase exists before the gate runs. Only the ESM entry carries
+       ?v=; its relative imports resolve unversioned and stay on revalidate
+       caching, so a deploy can never serve a stale module graph. -->
+  <script src="/vendor/supabase/supabase.js?v=<%= assetVersion %>" defer></script>
+  <script nonce="<%= nonce %>">window.__APP_MODULE = "/js/app/index.js?v=<%= assetVersion %>";</script>
+  <script src="/js/workspace-gate.js?v=<%= assetVersion %>" defer></script>
   <%- script %>
 </body>
 </html>

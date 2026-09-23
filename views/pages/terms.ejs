@@ -1,100 +1,231 @@
-<section class="page-hero page-hero--legal">
-  <div class="container">
-    <span class="eyebrow eyebrow--center">Legal</span>
-    <h1 class="page-hero__title">Terms of Service</h1>
-    <p class="page-hero__lead">
-      These terms govern your use of <%= site.name %>. By using the website and editor, you agree
-      to them. Please read them carefully.
-    </p>
-    <p class="legal-updated">Last updated: <%= lastUpdated %></p>
+<%
+// ============================================================
+//  Terms of Service — premium dark layout (matches the design ref).
+//  Crimson/red accent variant. Styling: public/css/terms.css
+//  (loaded only on "/terms"). TOC + numbered sections come from
+//  one array so the rail and the body never drift out of sync.
+// ============================================================
+const hi = {
+  file:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>',
+  cube:     '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/>',
+  shieldck: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  folder:   '<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/>',
+  copyright:'<circle cx="12" cy="12" r="10"/><path d="M14.8 9.3a3.5 3.5 0 1 0 0 5.4"/>',
+  refresh:  '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
+  warning:  '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
+  scales:   '<path d="M12 3v18M7 21h10M5 7h14l-3 6a3 3 0 0 1-6 0Zm14 0-3 6a3 3 0 0 1-6 0"/><path d="m5 7 3 6a3 3 0 0 1-6 0Z"/><path d="M6 3h12"/>',
+  link:     '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/>',
+  users:    '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
+  shield:   '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+  lock:     '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  globe:    '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20Z"/>',
+  check:    '<path d="M20 6 9 17l-5-5"/>',
+  q:        '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5"/><path d="M12 18h.01"/>',
+  cal:      '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  arrow:    '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+function ic(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (hi[name] || hi.file) + '</svg>';
+}
+
+const email = site.legalEmail;
+const mail = '<a href="mailto:' + email + '">' + email + '</a>';
+
+const features = [
+  { icon: 'users',    title: 'Fair and transparent',   desc: 'Clear rules for a safe experience.' },
+  { icon: 'shield',   title: 'Respect for your content', desc: 'You own your files and data.' },
+  { icon: 'lock',     title: 'Responsible use',         desc: 'Designed for productivity, not abuse.' },
+  { icon: 'globe',    title: 'A trusted platform',      desc: 'Built with privacy and security in mind.' },
+];
+
+// Section 3 acceptable-use list (rendered with red check bullets).
+const useList = [
+  'Use the Service to process content you do not have the right to use.',
+  'Infringe the intellectual property, privacy or other rights of others.',
+  'Attempt to disrupt, overload or gain unauthorised access to the Service.',
+  'Use the Service for unlawful, harmful, deceptive or abusive purposes.',
+];
+const useHtml =
+  '<p>You agree to use the Service lawfully and responsibly. In particular, you agree not to:</p>' +
+  '<ul class="tm-checks">' + useList.map(function (t) {
+    return '<li><span class="tm-checks__ico">' + ic('check') + '</span>' + t + '</li>';
+  }).join('') + '</ul>';
+
+const sections = [
+  { id: 'acceptance', icon: 'file', nav: '1. Acceptance', title: 'Acceptance of these terms', body:
+    '<p>By accessing or using ' + site.name + ' (the &ldquo;Service&rdquo;), you agree to be bound by these Terms of Service. If you do not agree to these terms, you must not use the Service.</p>' },
+
+  { id: 'service', icon: 'cube', nav: '2. Our Service', title: 'What the Service is', body:
+    '<p>' + site.name + ' is a browser-based platform that provides tools for working with PDFs and documents. The tools run in your web browser and process your files on your device. No account is required to use the basic tools, although some features may require an account in the future.</p>' },
+
+  { id: 'acceptable', icon: 'shieldck', nav: '3. Acceptable Use', title: 'Acceptable use', body: useHtml },
+
+  { id: 'content', icon: 'folder', nav: '4. Your Content', title: 'Your content', body:
+    '<p>You retain all rights to the files and content you process with the Service. Processing happens in your browser, and we do not receive or store your files on our servers. You are solely responsible for the content you choose to process and for maintaining your own copies and backups.</p>' },
+
+  { id: 'ip', icon: 'copyright', nav: '5. Intellectual Property', title: 'Intellectual property', body:
+    '<p>The Service, including its software, design, branding, text, graphics and other content, is owned by ' + site.name + ' or its licensors and is protected by applicable intellectual property laws. These terms do not grant you any right to use our name, logo, or branding without prior written permission.</p>' },
+
+  { id: 'availability', icon: 'refresh', nav: '6. Availability &amp; Changes', title: 'Availability and changes', body:
+    '<p>We provide the Service on an &ldquo;as is&rdquo; and &ldquo;as available&rdquo; basis. We may add, change, suspend or remove features at any time, and we do not guarantee that the Service will always be available, uninterrupted or error-free.</p>' },
+
+  { id: 'disclaimers', icon: 'warning', nav: '7. Disclaimers', title: 'Disclaimer of warranties', body:
+    '<p>To the fullest extent permitted by law, the Service is provided without warranties of any kind, whether express or implied, including fitness for a particular purpose and non-infringement. You use the Service at your own risk. We do not warrant that any results will be error-free or suitable for your specific needs.</p>' },
+
+  { id: 'liability', icon: 'scales', nav: '8. Limitation of Liability', title: 'Limitation of liability', body:
+    '<p>To the fullest extent permitted by law, ' + site.name + ' and its contributors will not be liable for any indirect, incidental, special, consequential or punitive damages, or for any loss of data arising out of or relating to your use of the Service.</p>' },
+
+  { id: 'thirdparty', icon: 'link', nav: '9. Third-Party Services', title: 'Third-party services and links', body:
+    '<p>The Service may display advertising or links to third-party websites (for example, Google AdSense). We are not responsible for the content, policies or practices of third parties. Your use of third-party services is governed by their own terms.</p>' },
+
+  { id: 'changes', icon: 'file', nav: '10. Changes to Terms', title: 'Changes to these terms', body:
+    '<p>We may update these Terms of Service from time to time. When we do, we will revise the &ldquo;Last updated&rdquo; date above. Your continued use of the Service after changes take effect constitutes acceptance of the updated terms.</p>' },
+];
+%>
+
+<!-- ============ HERO ============ -->
+<section class="tm-hero">
+  <div class="tm-hero__aura" aria-hidden="true"></div>
+  <div class="container tm-hero__inner">
+    <div class="tm-hero__copy">
+      <span class="kicker">Legal</span>
+      <h1 class="tm-hero__title">Terms of <span class="grad">Service</span></h1>
+      <p class="tm-hero__tag">Clear Rules. A Better Experience.</p>
+      <p class="tm-hero__sub">
+        These Terms of Service govern your access to and use of <%= site.name %>, including our
+        website, tools and related services. By using our platform, you agree to these terms.
+        Please read them carefully.
+      </p>
+      <div class="tm-hero__meta">
+        <span class="tm-meta"><span class="tm-meta__ico"><%- ic('cal') %></span>Last updated: <%= lastUpdated %></span>
+        <span class="tm-meta"><span class="tm-meta__ico"><%- ic('shieldck') %></span>Effective for all users worldwide</span>
+      </div>
+    </div>
+
+    <div class="tm-hero__visual" aria-hidden="true">
+      <svg class="tm-doc" viewBox="0 0 400 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+        <defs>
+          <linearGradient id="tmPaper" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#2a1220"/>
+            <stop offset="100%" stop-color="#1a0d1c"/>
+          </linearGradient>
+          <linearGradient id="tmEdge" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#f43f5e"/>
+            <stop offset="100%" stop-color="#a21caf"/>
+          </linearGradient>
+          <linearGradient id="tmShield" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#fb7185"/>
+            <stop offset="100%" stop-color="#be123c"/>
+          </linearGradient>
+          <radialGradient id="tmGlow" cx="50%" cy="46%" r="55%">
+            <stop offset="0%" stop-color="rgba(244,63,94,0.5)"/>
+            <stop offset="100%" stop-color="rgba(244,63,94,0)"/>
+          </radialGradient>
+        </defs>
+
+        <circle cx="196" cy="158" r="150" fill="url(#tmGlow)"/>
+        <ellipse cx="196" cy="168" rx="188" ry="120" fill="none" stroke="rgba(244,63,94,0.3)" stroke-width="1.3" transform="rotate(-14 196 168)"/>
+        <circle cx="54" cy="90" r="2.2" fill="#fb7185"/>
+        <circle cx="356" cy="230" r="2" fill="#f9a8d4"/>
+        <circle cx="330" cy="70" r="1.8" fill="#fda4af"/>
+
+        <!-- document -->
+        <g transform="translate(96,40)">
+          <path d="M8 4h150l40 40v196a8 8 0 0 1-8 8H8a8 8 0 0 1-8-8V12a8 8 0 0 1 8-8Z" fill="url(#tmPaper)" stroke="url(#tmEdge)" stroke-width="2.5"/>
+          <path d="M158 4v40h40" fill="none" stroke="url(#tmEdge)" stroke-width="2.5"/>
+          <g stroke="#c95a86" stroke-width="4" stroke-linecap="round" opacity="0.8">
+            <path d="M36 66h96"/><path d="M36 88h120"/><path d="M36 110h108"/><path d="M36 132h124"/>
+          </g>
+          <!-- signature squiggle -->
+          <path d="M40 196c14-22 22 14 34-4s16 10 30-4" fill="none" stroke="#f43f5e" stroke-width="3.5" stroke-linecap="round"/>
+        </g>
+
+        <!-- shield with red check -->
+        <g transform="translate(232,150)">
+          <path d="M56 6 12 22v34c0 32 44 48 44 48s44-16 44-48V22L56 6Z" fill="url(#tmShield)" stroke="rgba(255,255,255,0.35)" stroke-width="1.5"/>
+          <path d="M36 56l14 14 26-30" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+      </svg>
+
+      <span class="tm-eyebrow-note">Trust<br>Responsibility<br>People First</span>
+      <span class="tm-note">Simple Tools<br>Greater Possibilities</span>
+    </div>
   </div>
 </section>
 
-<section class="section">
-  <div class="container prose legal">
+<!-- ============ FEATURE CARDS ============ -->
+<section class="tm-featsec">
+  <div class="container">
+    <div class="tm-feats">
+      <% features.forEach(function (f) { %>
+        <article class="tm-feat">
+          <span class="tm-feat__ico"><%- ic(f.icon) %></span>
+          <div>
+            <h2><%= f.title %></h2>
+            <p><%= f.desc %></p>
+          </div>
+        </article>
+      <% }); %>
+    </div>
+  </div>
+</section>
 
-    <h2>1. Acceptance of these terms</h2>
-    <p>
-      By accessing or using <%= site.name %> (the “Service”), you agree to be bound by these Terms
-      of Service. If you do not agree, please do not use the Service.
-    </p>
+<!-- ============ TERMS BODY ============ -->
+<section class="tm-bodysec">
+  <div class="container tm-layout">
+    <!-- Contents rail -->
+    <aside class="tm-rail">
+      <nav class="tm-toc" aria-label="Contents">
+        <ol>
+          <% sections.forEach(function (s) { %>
+            <li>
+              <a href="#<%= s.id %>">
+                <span class="tm-toc__ico"><%- ic(s.icon) %></span>
+                <%- s.nav %>
+              </a>
+            </li>
+          <% }); %>
+        </ol>
+      </nav>
 
-    <h2>2. What the Service is</h2>
-    <p>
-      <%= site.name %> is a free, browser-based toolkit for working with PDFs and documents. The
-      tools run in your web browser and process your files on your own device. No account is
-      required to use the current tools.
-    </p>
+      <div class="tm-help">
+        <span class="tm-help__ico"><%- ic('q') %></span>
+        <h3>Need help?</h3>
+        <p>If you have any questions about these terms, we're here to help.</p>
+        <a href="/contact" class="tm-help__btn">Contact us <%- ic('arrow') %></a>
+      </div>
+    </aside>
 
-    <h2>3. Acceptable use</h2>
-    <p>You agree to use the Service lawfully and responsibly. In particular, you agree not to:</p>
-    <ul class="check-list check-list--muted">
-      <li>Use the Service to process content you do not have the right to use.</li>
-      <li>Infringe the intellectual property, privacy or other rights of others.</li>
-      <li>Attempt to disrupt, overload, reverse-engineer or gain unauthorised access to the Service.</li>
-      <li>Use the Service for anything unlawful, harmful, deceptive or abusive.</li>
-    </ul>
+    <!-- Numbered sections -->
+    <div class="tm-sections">
+      <% sections.forEach(function (s, i) { %>
+        <article class="tm-item" id="<%= s.id %>">
+          <span class="tm-item__n"><%= i + 1 %></span>
+          <div class="tm-item__body">
+            <h2><%= s.title %></h2>
+            <%- s.body %>
+          </div>
+          <span class="tm-item__ico"><%- ic(s.icon) %></span>
+        </article>
+      <% }); %>
+    </div>
+  </div>
+</section>
 
-    <h2>4. Your content</h2>
-    <p>
-      You retain all rights to the files and content you process with the Service. Because
-      processing happens in your browser, we do not receive or store your files, and we claim no
-      ownership over them. You are solely responsible for the content you choose to process and for
-      keeping your own copies and backups.
-    </p>
-
-    <h2>5. Intellectual property</h2>
-    <p>
-      The Service itself — including its software, design, branding and content — is owned by
-      <%= site.name %> or its licensors and is protected by applicable laws. These terms do not
-      grant you any right to use our name, logo or branding without prior written permission.
-    </p>
-
-    <h2>6. Availability and changes</h2>
-    <p>
-      We provide the Service on an “as is” and “as available” basis. We may add, change, suspend or
-      remove features at any time, and we do not guarantee that the Service will always be available,
-      uninterrupted or error-free.
-    </p>
-
-    <h2>7. Disclaimer of warranties</h2>
-    <p>
-      To the fullest extent permitted by law, the Service is provided without warranties of any
-      kind, whether express or implied, including fitness for a particular purpose and
-      non-infringement. You use the Service at your own risk. We do not warrant that conversions,
-      edits or exports will be error-free or suitable for any specific purpose, so please review
-      your results before relying on them.
-    </p>
-
-    <h2>8. Limitation of liability</h2>
-    <p>
-      To the fullest extent permitted by law, <%= site.name %> and its contributors will not be
-      liable for any indirect, incidental, special, consequential or punitive damages, or for any
-      loss of data, arising out of or relating to your use of the Service. Because your files are
-      processed on your device and not stored by us, you are responsible for maintaining your own
-      backups.
-    </p>
-
-    <h2>9. Third-party services and links</h2>
-    <p>
-      The Service may display advertising or link to third-party websites (for example, Google
-      AdSense). We are not responsible for the content, policies or practices of third parties.
-      Your use of third-party services is governed by their own terms.
-    </p>
-
-    <h2>10. Changes to these terms</h2>
-    <p>
-      We may update these terms from time to time. When we do, we will revise the “Last updated”
-      date above. Your continued use of the Service after changes take effect constitutes acceptance
-      of the updated terms.
-    </p>
-
-    <h2>11. Contact</h2>
-    <p>
-      Questions about these terms? Email
-      <a href="mailto:<%= site.legalEmail %>"><%= site.legalEmail %></a> or visit our
-      <a href="/contact">Contact page</a>.
-    </p>
-
+<!-- ============ CONTACT BANNER ============ -->
+<section class="tm-bodysec tm-ctasec">
+  <div class="container">
+    <div class="tm-cta">
+      <div class="tm-cta__aura" aria-hidden="true"></div>
+      <span class="tm-cta__ico"><%- ic('shield') %></span>
+      <div class="tm-cta__copy">
+        <h2>Have questions about these terms?</h2>
+        <p>
+          If you have any questions, please contact us at
+          <a href="mailto:<%= email %>"><%= email %></a> or visit our <a href="/contact">Contact</a> page.
+        </p>
+      </div>
+      <a href="/contact" class="tm-cta__btn">Contact us <%- ic('arrow') %></a>
+    </div>
   </div>
 </section>

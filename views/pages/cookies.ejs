@@ -1,85 +1,259 @@
-<section class="page-hero page-hero--legal">
-  <div class="container">
-    <span class="eyebrow eyebrow--center">Legal</span>
-    <h1 class="page-hero__title">Cookie Policy</h1>
-    <p class="page-hero__lead">
-      This policy explains the cookies and similar browser storage that <%= site.name %> uses,
-      why we use them, and how you can control them.
-    </p>
-    <p class="legal-updated">Last updated: <%= lastUpdated %></p>
+<%
+// ============================================================
+//  Cookie Policy — premium dark layout (matches the design ref).
+//  Styling: public/css/cookies.css (loaded only on "/cookies").
+//  Sticky TOC + numbered sections are generated from one array so
+//  the contents rail and the body never drift out of sync.
+// ============================================================
+const hi = {
+  book:    '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+  gear:    '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 0 1-4 0v-.1A1.7 1.7 0 0 0 7 19.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 0 1 0-4h.1A1.7 1.7 0 0 0 4.7 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9.4A1.7 1.7 0 0 0 10.6 3V3a2 2 0 0 1 4 0v.1A1.7 1.7 0 0 0 17 4.7l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+  layers:  '<path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  link:    '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/>',
+  db:      '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+  shieldck:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
+  user:    '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  shield:  '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+  lock:    '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  eye:     '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  chart:   '<path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7" rx="1"/><rect x="12.5" y="6" width="3" height="11" rx="1"/><rect x="18" y="13" width="3" height="4" rx="1"/>',
+  mega:    '<path d="M3 11v2a1 1 0 0 0 1 1h2l4 4V6L6 10H4a1 1 0 0 0-1 1Z"/><path d="M15 8a4 4 0 0 1 0 8"/>',
+  check:   '<path d="M20 6 9 17l-5-5"/>',
+  mail:    '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/>',
+  q:       '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5"/><path d="M12 18h.01"/>',
+  cal:     '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  arrow:   '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+function ic(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (hi[name] || hi.book) + '</svg>';
+}
+
+const email = site.privacyEmail;
+const mail = '<a href="mailto:' + email + '">' + email + '</a>';
+
+const features = [
+  { icon: 'gear',    title: 'Essential Only',  desc: 'We use only the cookies required for the website to function properly.' },
+  { icon: 'user',    title: 'Your Control',    desc: 'Optional cookies are enabled only with your consent.' },
+  { icon: 'shield',  title: 'Privacy Focused', desc: 'We do not use invasive tracking technologies.' },
+  { icon: 'sliders', title: 'Transparent',     desc: 'You can review and change your preferences at any time.' },
+];
+
+const heroChecks = [
+  { icon: 'lock', label: 'Secure browsing' },
+  { icon: 'user', label: 'Your data, your choice' },
+  { icon: 'eye',  label: 'Always transparent' },
+];
+
+// Section 2 checklist + Section 3 card grid are built as HTML inside the body.
+const useList = [
+  'Keep the website functioning properly',
+  'Remember your preferences and settings',
+  'Provide a secure and reliable experience',
+  'Understand basic usage to improve our services (only with consent, where applicable)',
+  'Display relevant advertising (only with consent, where applicable)',
+];
+const useHtml =
+  '<p>' + site.name + ' uses cookies only for legitimate purposes and in a way that respects your privacy. We use them to:</p>' +
+  '<ul class="ck-checks">' + useList.map(function (t) {
+    return '<li><span class="ck-checks__ico">' + ic('check') + '</span>' + t + '</li>';
+  }).join('') + '</ul>';
+
+const typeCards = [
+  { icon: 'gear',  title: 'Essential cookies',        badge: 'Always active',         tone: 'green', desc: 'These cookies are necessary for the website to work and cannot be disabled. They enable core functionality such as security, network management and remembering your cookie preferences.' },
+  { icon: 'chart', title: 'Analytics cookies',        badge: 'Not in use',            tone: 'muted', desc: 'We do not currently use analytics cookies. If we introduce analytics tools in the future, we will update this policy and request your consent in accordance with applicable laws.' },
+  { icon: 'mega',  title: 'Advertising cookies',      badge: 'Optional',              tone: 'amber', desc: 'When you give consent, we may use cookies from Google AdSense and other trusted partners to show relevant ads, measure ad performance and prevent fraud. These cookies are only set with your consent where required by law.' },
+  { icon: 'db',    title: 'Other storage technologies', badge: 'Used for functionality', tone: 'blue', desc: 'We may use local storage or similar technologies to save application settings (such as editor preferences) directly on your device. This data remains in your browser and is not uploaded to our servers.' },
+];
+const typesHtml =
+  '<p>We currently use the following categories of cookies:</p>' +
+  '<div class="ck-types">' + typeCards.map(function (c) {
+    return '<article class="ck-type">' +
+      '<span class="ck-type__ico">' + ic(c.icon) + '</span>' +
+      '<h3>' + c.title + '</h3>' +
+      '<p>' + c.desc + '</p>' +
+      '<span class="ck-badge ck-badge--' + c.tone + '">' + c.badge + '</span>' +
+    '</article>';
+  }).join('') + '</div>';
+
+const sections = [
+  { id: 'intro', icon: 'book', nav: 'Introduction', title: 'What are cookies and similar technologies?', body:
+    '<p>Cookies are small text files stored on your device by your browser. They help a website remember your preferences, understand how the site is used, and provide a smoother, more secure experience. We may also use similar technologies such as local storage and session storage, which work in a similar way.</p>' },
+
+  { id: 'how', icon: 'gear', nav: 'How we use cookies', title: 'How we use cookies', body: useHtml },
+
+  { id: 'types', icon: 'layers', nav: 'Types of cookies', title: 'Types of cookies we use', body: typesHtml },
+
+  { id: 'manage', icon: 'sliders', nav: 'Managing your preferences', title: 'Managing your preferences', body:
+    '<p>You can accept or reject optional cookies through our cookie consent banner. You can also change your preferences at any time via Cookie Settings in the footer of the website. In addition, most browsers allow you to block or delete cookies through their settings.</p>' },
+
+  { id: 'thirdparty', icon: 'link', nav: 'Third-party services', title: 'Third-party services', body:
+    '<p>Some third-party services used on our website, such as Google AdSense, Cloudflare and payment providers, may set their own cookies. These providers operate under their own privacy and cookie policies.</p>' },
+
+  { id: 'retention', icon: 'db', nav: 'Data retention', title: 'Data retention', body:
+    '<p>Cookie preference choices are stored only as long as necessary to remember your selection and maintain the website&rsquo;s functionality. We do not store document content or personal files using cookies.</p>' },
+
+  { id: 'rights', icon: 'shieldck', nav: 'Your rights', title: 'Your rights', body:
+    '<p>Depending on your location, you may have certain rights regarding the use of cookies and similar technologies. You can contact us at ' + mail + ' if you have any questions about your rights.</p>' },
+
+  { id: 'changes', icon: 'refresh', nav: 'Changes to this policy', title: 'Changes to this policy', body:
+    '<p>We may update this Cookie Policy from time to time to reflect changes in our services, technology, or legal requirements. The updated version will be posted on this page with a new &ldquo;Last updated&rdquo; date.</p>' },
+];
+%>
+
+<!-- ============ HERO ============ -->
+<section class="ck-hero">
+  <div class="ck-hero__aura" aria-hidden="true"></div>
+  <div class="container ck-hero__inner">
+    <div class="ck-hero__copy">
+      <span class="kicker kicker--pill">Legal</span>
+      <h1 class="ck-hero__title">Cookie <span class="grad">Policy</span></h1>
+      <p class="ck-hero__tag">A safer, more personal browsing experience</p>
+      <p class="ck-hero__sub">
+        This Cookie Policy explains what cookies and similar technologies <%= site.name %> uses,
+        why we use them, and how you can manage your preferences. We are committed to transparency
+        and giving you control over your data.
+      </p>
+      <p class="ck-updated"><span class="ck-updated__ico"><%- ic('cal') %></span>Last updated: <%= lastUpdated %></p>
+    </div>
+
+    <div class="ck-hero__visual" aria-hidden="true">
+      <svg class="ck-cookie" viewBox="0 0 400 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+        <defs>
+          <radialGradient id="ckBody" cx="40%" cy="34%" r="72%">
+            <stop offset="0%" stop-color="#fbc4ec"/>
+            <stop offset="42%" stop-color="#e07fd0"/>
+            <stop offset="100%" stop-color="#7c3aed"/>
+          </radialGradient>
+          <radialGradient id="ckGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(192,132,252,0.55)"/>
+            <stop offset="100%" stop-color="rgba(124,58,237,0)"/>
+          </radialGradient>
+          <linearGradient id="ckShield" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#a78bfa"/>
+            <stop offset="100%" stop-color="#7c3aed"/>
+          </linearGradient>
+          <mask id="ckBite">
+            <rect width="400" height="360" fill="#fff"/>
+            <circle cx="300" cy="96" r="52" fill="#000"/>
+          </mask>
+        </defs>
+
+        <!-- soft glow -->
+        <circle cx="196" cy="168" r="160" fill="url(#ckGlow)"/>
+        <!-- orbit rings -->
+        <ellipse cx="196" cy="168" rx="184" ry="150" fill="none" stroke="rgba(167,139,250,0.35)" stroke-width="1.4"/>
+        <ellipse cx="196" cy="168" rx="150" ry="184" fill="none" stroke="rgba(167,139,250,0.18)" stroke-width="1.4"/>
+        <!-- sparkles -->
+        <circle cx="60" cy="70" r="2.4" fill="#c4b5fd"/>
+        <circle cx="352" cy="250" r="2" fill="#c4b5fd"/>
+        <circle cx="70" cy="280" r="1.8" fill="#a78bfa"/>
+        <circle cx="330" cy="70" r="1.8" fill="#e9d5ff"/>
+
+        <!-- cookie body (with a bite) -->
+        <g mask="url(#ckBite)">
+          <circle cx="196" cy="168" r="122" fill="url(#ckBody)"/>
+          <circle cx="196" cy="168" r="122" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+        </g>
+        <!-- chocolate chips -->
+        <circle cx="160" cy="118" r="14" fill="#5b2a86"/>
+        <circle cx="232" cy="140" r="11" fill="#4c2179"/>
+        <circle cx="150" cy="196" r="12" fill="#4c2179"/>
+        <circle cx="210" cy="214" r="15" fill="#5b2a86"/>
+        <circle cx="258" cy="188" r="9"  fill="#4c2179"/>
+        <circle cx="190" cy="160" r="8"  fill="#6b3aa0"/>
+
+        <!-- shield / checkmark badge -->
+        <g transform="translate(238,196)">
+          <path d="M40 4 8 16v22c0 22 32 34 32 34s32-12 32-34V16L40 4Z" fill="url(#ckShield)" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+          <path d="M26 40l10 10 20-22" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+      </svg>
+
+      <span class="ck-note">Your<br>Privacy<br>Our Priority</span>
+      <ul class="ck-hchecks">
+        <% heroChecks.forEach(function (c) { %>
+          <li><span class="ck-hchecks__ico"><%- ic(c.icon) %></span><%= c.label %></li>
+        <% }); %>
+      </ul>
+    </div>
   </div>
 </section>
 
-<section class="section">
-  <div class="container prose legal">
+<!-- ============ FEATURE CARDS ============ -->
+<section class="ck-featsec">
+  <div class="container">
+    <div class="ck-feats">
+      <% features.forEach(function (f) { %>
+        <article class="ck-feat">
+          <span class="ck-feat__ico"><%- ic(f.icon) %></span>
+          <div>
+            <h2><%= f.title %></h2>
+            <p><%= f.desc %></p>
+          </div>
+        </article>
+      <% }); %>
+    </div>
+  </div>
+</section>
 
-    <h2>1. What are cookies and local storage?</h2>
-    <p>
-      Cookies are small text files a website can store in your browser. Similar technologies —
-      such as <em>local storage</em> — let a site keep small pieces of information on your device.
-      Together they are used to remember preferences and, in some cases, to support advertising.
-    </p>
+<!-- ============ POLICY BODY ============ -->
+<section class="ck-bodysec">
+  <div class="container ck-layout">
+    <!-- Contents rail -->
+    <aside class="ck-rail">
+      <nav class="ck-toc" aria-label="Contents">
+        <ol>
+          <% sections.forEach(function (s, i) { %>
+            <li>
+              <a href="#<%= s.id %>">
+                <span class="ck-toc__ico"><%- ic(s.icon) %></span>
+                <span class="ck-toc__n"><%= i + 1 %>.</span> <%= s.nav %>
+              </a>
+            </li>
+          <% }); %>
+        </ol>
+      </nav>
 
-    <h2>2. How we use them</h2>
-    <p>
-      <%= site.name %> is designed to be light on cookies. We currently use only what is needed to
-      run the site and to remember your choices. Non-essential technologies (such as advertising
-      cookies) are used only where you have consented.
-    </p>
+      <div class="ck-help">
+        <span class="ck-help__ico"><%- ic('q') %></span>
+        <h3>Need help?</h3>
+        <p>If you have any questions about our use of cookies, feel free to contact us.</p>
+        <a href="/contact" class="ck-help__btn">Contact us <%- ic('arrow') %></a>
+      </div>
+    </aside>
 
-    <h3>Strictly necessary</h3>
-    <ul class="check-list check-list--muted">
-      <li>
-        <strong>Cookie preference.</strong> When you accept or decline non-essential cookies, we
-        store that choice in your browser’s local storage so we can respect it on your next visit.
-        This is required for the site to honour your decision and cannot be switched off.
-      </li>
-    </ul>
+    <!-- Numbered sections -->
+    <div class="ck-sections">
+      <% sections.forEach(function (s, i) { %>
+        <article class="ck-item" id="<%= s.id %>">
+          <span class="ck-item__n"><%= i + 1 %></span>
+          <div class="ck-item__body">
+            <h2><%= s.title %></h2>
+            <%- s.body %>
+          </div>
+        </article>
+      <% }); %>
+    </div>
+  </div>
+</section>
 
-    <h3>Advertising (only with consent, when enabled)</h3>
-    <p>
-      To help keep <%= site.name %> free, we may show ads using Google AdSense. When advertising is
-      enabled and you have consented (where consent is required), Google and its partners may set
-      cookies to serve and measure ads.
-    </p>
-    <ul class="check-list check-list--muted">
-      <li>These cookies are set by Google, not by <%= site.name %>.</li>
-      <li>They may be used to show ads based on your prior visits to this and other sites.</li>
-      <li>You can manage or opt out via <a href="https://www.google.com/settings/ads" rel="noopener noreferrer" target="_blank">Google Ads Settings</a> and <a href="https://www.aboutads.info/choices/" rel="noopener noreferrer" target="_blank">aboutads.info/choices</a>.</li>
-    </ul>
-
-    <h3>Analytics</h3>
-    <p>
-      We do not currently use analytics cookies. If we add analytics in the future, we will update
-      this policy and, where required, ask for your consent first.
-    </p>
-
-    <h2>3. Managing your choices</h2>
-    <p>
-      We currently do not set optional analytics or advertising cookies, so no consent banner is
-      shown. If we introduce optional cookies in the future (for example, when advertising is
-      enabled), we will show a consent banner with three clear options — <strong>Accept all</strong>,
-      <strong>Decline optional</strong>, and <strong>Manage preferences</strong> — where you can turn
-      optional categories on or off individually. Strictly necessary storage is always on because the
-      site cannot work without it.
-    </p>
-    <p>
-      Optional analytics and advertising technologies are never loaded unless you allow them. When a
-      banner is in use, consent defaults to “denied” until you choose, and your choice is shared with
-      advertising and analytics tools using Google Consent Mode so they respect your decision — and a
-      <strong>Cookie settings</strong> link in the footer lets you change it at any time.
-    </p>
-    <p>
-      You can also control cookies through your browser settings — most browsers let you block or
-      delete cookies.
-    </p>
-
-    <h2>4. More information</h2>
-    <p>
-      For how cookies fit into our wider handling of data, see our
-      <a href="/privacy">Privacy Policy</a>. Questions? Email
-      <a href="mailto:<%= site.privacyEmail %>"><%= site.privacyEmail %></a>.
-    </p>
-
+<!-- ============ PRIVACY BANNER ============ -->
+<section class="ck-bodysec ck-ctasec">
+  <div class="container">
+    <div class="ck-cta">
+      <div class="ck-cta__aura" aria-hidden="true"></div>
+      <span class="ck-cta__ico"><%- ic('shield') %></span>
+      <div class="ck-cta__copy">
+        <h2>Your privacy matters</h2>
+        <p>
+          We are committed to using cookies responsibly and transparently. If you have any questions
+          about this policy or how we handle cookies, please contact us at
+          <a href="mailto:<%= email %>"><%= email %></a>.
+        </p>
+      </div>
+      <a href="/contact" class="ck-cta__btn">Contact us <%- ic('arrow') %></a>
+    </div>
   </div>
 </section>
