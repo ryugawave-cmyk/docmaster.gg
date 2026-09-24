@@ -8,6 +8,7 @@
  * Run: `node scripts/verify-worker-credits.mjs`
  */
 import * as credits from '../worker/credits.js';
+import { buildSummary, renderUsage } from '../worker/admin.js';
 
 let failures = 0;
 const check = (name, cond, extra) => {
@@ -74,6 +75,21 @@ check('legacy account refills + gains a window', migrated.credits === 25 && !!mi
 // --- No-KV degrade (AI still answers, credits just don't persist) ----------
 const acctNoKv = await credits.getAccount({}, 'nokv', 'n@e.com');
 check('without KV: still returns a seeded account', acctNoKv.credits === 25, acctNoKv.credits);
+
+// --- Admin usage roll-up ---------------------------------------------------
+const summary = buildSummary(
+  [{ userId: 'u1', email: 'a@x.com', plan: 'free', credits: 20 }, { userId: 'u2', email: 'b@x.com', plan: 'lite', credits: 190 }],
+  [
+    { type: 'debit', userId: 'u1', email: 'a@x.com', plan: 'free', action: 'article_writing', creditsUsed: 3, promptTokens: 100, outputTokens: 50, totalTokens: 150, estimatedCostUsd: 0.001, ts: '2026-09-24T10:00:00Z' },
+    { type: 'debit', userId: 'u2', email: 'b@x.com', plan: 'lite', action: 'story_writing', creditsUsed: 5, promptTokens: 200, outputTokens: 300, totalTokens: 500, estimatedCostUsd: 0.004, ts: '2026-09-24T11:00:00Z' },
+    { type: 'grant', userId: 'u1', reason: 'signup', amount: 25, ts: '2026-09-24T09:00:00Z' }, // ignored
+  ],
+);
+check('admin: one row per user (seeded from wallets)', summary.rows.length === 2, summary.rows.length);
+check('admin: totals sum debits only (grants ignored)', summary.totals.requests === 2 && summary.totals.creditsUsed === 8, JSON.stringify(summary.totals));
+check('admin: top spender first (story 5 > article 3)', summary.rows[0].userId === 'u2', summary.rows[0].userId);
+check('admin: per-action tally present', !!summary.actions.story_writing && summary.actions.story_writing.creditsUsed === 5, JSON.stringify(summary.actions.story_writing));
+check('admin: HTML renders with the totals', /AI usage/.test(renderUsage(summary)) && renderUsage(summary).includes('a@x.com'));
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('\nAll worker credit-port checks passed.');

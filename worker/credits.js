@@ -88,7 +88,7 @@ const PLANS = {
   lite: { key: 'lite', label: 'Lite', monthlyCredits: 200 },
   pro: { key: 'pro', label: 'Pro', monthlyCredits: 800 },
 };
-const DEFAULT_PLAN = 'free';
+export const DEFAULT_PLAN = 'free';
 export const RESET_INTERVAL_DAYS = 3; // rolling refill window, per user
 
 const MODEL_PRICING = {
@@ -208,6 +208,33 @@ export async function refundFailed(env, user, ctx, reason) {
     reason: reason || 'ai_request_failed', balanceAfter: account.credits,
   });
   return account.credits;
+}
+
+/** Read all wallets from KV (for the admin dashboard). Paginates the key list. */
+export async function allAccounts(env) {
+  return listJson(env, 'credit:');
+}
+
+/** Read the whole audit ledger from KV (newest first). */
+export async function readLedger(env) {
+  const rows = await listJson(env, 'cledger:');
+  return rows.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+}
+
+/** List + JSON-parse every value under a KV key prefix (cursor-paginated). */
+async function listJson(env, prefix) {
+  if (!env.CREDITS_KV) return [];
+  const out = [];
+  let cursor;
+  do {
+    const list = await env.CREDITS_KV.list({ prefix, cursor });
+    for (const k of list.keys) {
+      const v = await env.CREDITS_KV.get(k.name);
+      if (v) { try { out.push(JSON.parse(v)); } catch { /* skip */ } }
+    }
+    cursor = list.list_complete ? null : list.cursor;
+  } while (cursor);
+  return out;
 }
 
 /** Append one audit record (best-effort; a logging failure never breaks the flow). */

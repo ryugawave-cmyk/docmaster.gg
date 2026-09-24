@@ -18,6 +18,7 @@
 import { PROVIDERS, SYSTEM, AGENT_SYSTEM, extractJson, toActions } from './ai.js';
 import * as credits from './credits.js';
 import { resolveUser } from './auth.js';
+import { handleAdminUsage } from './admin.js';
 
 /** Build the Content-Security-Policy string for a given nonce (mirrors app.js). */
 function csp(nonce) {
@@ -119,6 +120,11 @@ export default {
     // are stored in KV (env.CREDITS_KV). See handleAi + worker/{ai,credits,auth}.js.
     if (pathname.startsWith('/api/ai/')) {
       return handleAi(request, env, pathname);
+    }
+
+    // ----- Admin: AI usage & credits dashboard (token-gated) ----------------
+    if (pathname === '/admin/usage' || pathname === '/admin/usage.json') {
+      return handleAdminUsage(request, env, url);
     }
 
     // ----- Large AI assets: assets first, then the GitHub Release -----------

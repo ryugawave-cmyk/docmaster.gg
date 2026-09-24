@@ -1,68 +1,72 @@
 {
-  // Cloudflare Worker config for DocMaster.
-  //
-  // "name" is the ONLY thing that decides whether a deploy overwrites another
-  // project. It is DELIBERATELY different from the background remover
-  // ("advanced-bg-remover"), so deploying DocMaster can NEVER touch or remove
-  // that project. They live side by side.
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "docmaster",
-  "main": "worker/index.js",
-  "compatibility_date": "2026-07-21",
-  "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
-
-  // The static site built by `npm run build` (scripts/build-static.js).
-  // run_worker_first: the Worker sees every request first, so it can inject the
-  // per-request CSP nonce and set the isolation headers before serving assets.
-  "assets": {
-    "directory": "dist",
-    "binding": "ASSETS",
-    "run_worker_first": true
-  }
-
-  // ----- Cloud AI + credits (POST /api/ai/* in worker/index.js) -----------
-  // The AI proxy + per-user credit wallet live in the Worker now. To turn it on:
-  //
-  // 1) Create a KV namespace for the credit wallet + audit ledger, then bind it
-  //    (uncomment kv_namespaces below and paste the printed id):
-  //      npx wrangler kv namespace create CREDITS_KV
-  //
-  //    "kv_namespaces": [
-  //      { "binding": "CREDITS_KV", "id": "<your-credits-kv-id>" }
-  //      // add CONTACT_KV here too if you use the contact inbox
-  //    ],
-  //
-  // 2) Set the provider + model as plain vars, and the API KEY as a SECRET:
-  //      // "vars": { "AI_PROVIDER": "gemini", "AI_MODEL": "gemini-3.6-flash" },
-  //      npx wrangler secret put AI_API_KEY
-  //    (Supabase URL + anon key have safe public defaults in worker/auth.js;
-  //     override with SUPABASE_URL / SUPABASE_ANON_KEY vars only if the project moves.)
-  //
-  // Without CREDITS_KV the AI still answers, but balances won't persist (no real
-  // metering). Without AI_API_KEY, /api/ai/chat returns 503 (feature off).
-
-  // ----- Contact form (POST /api/contact in worker/index.js) --------------
-  // Messages are STORED in KV (browse them under Workers & Pages → KV in the
-  // dashboard) and, if a mail provider is set, EMAILED to your inbox.
-  //
-  // 1) To store in KV, create a namespace and uncomment the binding below:
-  //      npx wrangler kv namespace create CONTACT_KV
-  //    then paste the printed id here (add a comma after the assets block) and
-  //    redeploy:
-  //      "kv_namespaces": [
-  //        { "binding": "CONTACT_KV", "id": "<your-kv-namespace-id>" }
-  //      ]
-  //
-  // 2) To EMAIL every message to your inbox (easiest — no domain/DNS needed),
-  //    get a free access key at https://web3forms.com and set it as a secret:
-  //      npx wrangler secret put WEB3FORMS_KEY
-  //      npx wrangler secret put CONTACT_TO      # optional: your inbox address
-  //    (Alternatively use Resend: set RESEND_API_KEY and optionally RESEND_FROM.)
-  //    Secrets are set on the deployed Worker — never in this file or the client.
-
-  // The oversized AI files (the 59 MB ONNX layout model + the 26 MB ORT .wasm)
-  // exceed Cloudflare's 25 MiB asset limit, so they are NOT bundled here. They
-  // are published on this repo's GitHub Release and the Worker proxies them
-  // same-origin (see RELEASE_BASE in worker/index.js). No R2, no bucket, no card.
+	// Cloudflare Worker config for DocMaster.
+	//
+	// "name" is the ONLY thing that decides whether a deploy overwrites another
+	// project. It is DELIBERATELY different from the background remover
+	// ("advanced-bg-remover"), so deploying DocMaster can NEVER touch or remove
+	// that project. They live side by side.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "docmaster",
+	"main": "worker/index.js",
+	"compatibility_date": "2026-07-21",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	// The static site built by `npm run build` (scripts/build-static.js).
+	// run_worker_first: the Worker sees every request first, so it can inject the
+	// per-request CSP nonce and set the isolation headers before serving assets.
+	"assets": {
+		"directory": "dist",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
+	"kv_namespaces": [
+		{
+			"binding": "CREDITS_KV",
+			"id": "ab62242a982b44c29b48e188cd998aa7",
+			"remote": true
+		}
+	]
+	// ----- Cloud AI + credits (POST /api/ai/* in worker/index.js) -----------
+	// The AI proxy + per-user credit wallet live in the Worker. CREDITS_KV (the
+	// wallet + audit ledger) is bound above. Remaining setup:
+	//
+	// 1) Set the API KEY as a SECRET (provider defaults to gemini / gemini-3.6-flash):
+	//      npx wrangler secret put AI_API_KEY
+	//    Optional — pick another provider/model with plain vars:
+	//      // "vars": { "AI_PROVIDER": "gemini", "AI_MODEL": "gemini-3.6-flash" },
+	//    (Supabase URL + anon key have safe public defaults in worker/auth.js;
+	//     override with SUPABASE_URL / SUPABASE_ANON_KEY vars only if the project moves.)
+	//
+	// 2) OPTIONAL — view usage at /admin/usage (per-user credits/tokens/cost):
+	//      npx wrangler secret put ADMIN_TOKEN
+	//    then open https://<your-domain>/admin/usage?token=YOUR_TOKEN
+	//
+	// Without AI_API_KEY, /api/ai/chat returns 503 (feature off). Without CREDITS_KV
+	// the AI still answers but balances won't persist (no real metering).
+	// ----- Contact form (POST /api/contact in worker/index.js) --------------
+	// Messages are STORED in KV (browse them under Workers & Pages → KV in the
+	// dashboard) and, if a mail provider is set, EMAILED to your inbox.
+	//
+	// 1) To store in KV, create a namespace and uncomment the binding below:
+	//      npx wrangler kv namespace create CONTACT_KV
+	//    then paste the printed id here (add a comma after the assets block) and
+	//    redeploy:
+	//      "kv_namespaces": [
+	//        { "binding": "CONTACT_KV", "id": "<your-kv-namespace-id>" }
+	//      ]
+	//
+	// 2) To EMAIL every message to your inbox (easiest — no domain/DNS needed),
+	//    get a free access key at https://web3forms.com and set it as a secret:
+	//      npx wrangler secret put WEB3FORMS_KEY
+	//      npx wrangler secret put CONTACT_TO      # optional: your inbox address
+	//    (Alternatively use Resend: set RESEND_API_KEY and optionally RESEND_FROM.)
+	//    Secrets are set on the deployed Worker — never in this file or the client.
+	// The oversized AI files (the 59 MB ONNX layout model + the 26 MB ORT .wasm)
+	// exceed Cloudflare's 25 MiB asset limit, so they are NOT bundled here. They
+	// are published on this repo's GitHub Release and the Worker proxies them
+	// same-origin (see RELEASE_BASE in worker/index.js). No R2, no bucket, no card.
 }
