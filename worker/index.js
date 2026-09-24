@@ -15,6 +15,10 @@
  * server; this Worker only serves files and headers.
  */
 
+import { PROVIDERS, SYSTEM, AGENT_SYSTEM, extractJson, toActions } from './ai.js';
+import * as credits from './credits.js';
+import { resolveUser } from './auth.js';
+
 /** Build the Content-Security-Policy string for a given nonce (mirrors app.js). */
 function csp(nonce) {
   return [
@@ -110,14 +114,11 @@ export default {
       return handleContactRead(request, env, url);
     }
 
-    // ----- Future cloud AI --------------------------------------------------
-    // When you add a cloud model, implement it here and read the key from
-    // env (a Worker secret). Until then, return 501 so nothing pretends to work.
+    // ----- Cloud AI (proxy + credits) --------------------------------------
+    // The provider key lives in a Worker secret (env.AI_API_KEY); per-user credits
+    // are stored in KV (env.CREDITS_KV). See handleAi + worker/{ai,credits,auth}.js.
     if (pathname.startsWith('/api/ai/')) {
-      return Response.json(
-        { error: 'not_implemented', message: 'Cloud AI endpoint is not enabled yet.' },
-        { status: 501 }
-      );
+      return handleAi(request, env, pathname);
     }
 
     // ----- Large AI assets: assets first, then the GitHub Release -----------
@@ -268,6 +269,116 @@ async function handleContactRead(request, env, url) {
   <style>body{font:15px/1.5 system-ui,Segoe UI,Arial;margin:0;background:#f6f7fb;color:#111}header{padding:18px 24px;background:#4f46e5;color:#fff}header h1{margin:0;font-size:18px}.wrap{padding:20px 24px}table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.06)}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #eef;vertical-align:top}th{background:#f0f1f8;font-size:12px;text-transform:uppercase}td.ts{white-space:nowrap;color:#666;font-size:13px}td.msg{white-space:pre-wrap;max-width:520px}.empty{padding:40px;text-align:center;color:#777}</style>
   <header><h1>📨 Contact inbox</h1></header><div class="wrap">${msgs.length ? `<table><thead><tr><th>When</th><th>From</th><th>Reason</th><th>Message</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No messages yet.</div>'}</div>`;
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
+/* ============================ Cloud AI proxy ============================== */
+// Mirrors the Express routes (src/routes/ai.js): a credit-gated provider proxy.
+// Key from env.AI_API_KEY (Worker secret); wallet in env.CREDITS_KV (KV namespace).
+
+const aiJson = (body, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+
+async function handleAi(request, env, pathname) {
+  const provider = (env.AI_PROVIDER || 'gemini').toLowerCase();
+  const aiEnabled = Boolean(env.AI_API_KEY);
+
+  // Public catalogue — no auth, no key, no deduction.
+  if (pathname === '/api/ai/credit-info' && request.method === 'GET') {
+    return aiJson(credits.creditInfo());
+  }
+
+  // Read-only balance for the header badge — needs identity, not a provider key.
+  if (pathname === '/api/ai/credits' && request.method === 'GET') {
+    const user = await resolveUser(request, env);
+    if (!user) return aiJson({ error: 'Please sign in to use the AI assistant.', code: 'AUTH_REQUIRED' }, 401);
+    const account = await credits.getAccount(env, user.id, user.email);
+    const plan = credits.getPlan(account.plan);
+    return aiJson({
+      credits: account.credits, plan: account.plan, planLabel: plan.label,
+      monthlyCredits: plan.monthlyCredits, resetAt: account.resetAt || null, resetDays: credits.RESET_INTERVAL_DAYS,
+    });
+  }
+
+  // Pre-flight cost estimate — same resolver as /chat, so estimate == charge.
+  if (pathname === '/api/ai/estimate' && request.method === 'POST') {
+    let body; try { body = await request.json(); } catch { return aiJson({ error: 'Invalid request.' }, 400); }
+    if (typeof body?.prompt !== 'string' || !body.prompt.trim()) return aiJson({ error: 'A prompt is required.' }, 400);
+    const user = await resolveUser(request, env);
+    if (!user) return aiJson({ error: 'Please sign in to use the AI assistant.', code: 'AUTH_REQUIRED' }, 401);
+    const resolved = credits.resolveTask({ prompt: body.prompt, action: body.action });
+    if (!resolved.ok) return aiJson({ error: `Unknown AI action "${resolved.action}".`, code: 'UNKNOWN_ACTION' }, 400);
+    const account = await credits.getAccount(env, user.id, user.email);
+    return aiJson({
+      action: resolved.action, actionLabel: credits.getActionLabel(resolved.action), cost: resolved.cost,
+      credits: account.credits, plan: account.plan, sufficient: account.credits >= resolved.cost,
+    });
+  }
+
+  // The AI request itself.
+  if (pathname === '/api/ai/chat' && request.method === 'POST') {
+    if (!aiEnabled) return aiJson({ error: 'AI is not configured. Set AI_API_KEY as a Worker secret.' }, 503);
+    let body; try { body = await request.json(); } catch { return aiJson({ error: 'Invalid request.' }, 400); }
+
+    const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) return aiJson({ error: 'A prompt is required.' }, 400);
+    const img = body?.image;
+    const hasImage = img && typeof img.data === 'string' && img.data;
+    if (hasImage && provider !== 'gemini') return aiJson({ error: 'Image input is only wired for the Gemini provider right now.' }, 400);
+
+    const user = await resolveUser(request, env);
+    if (!user) return aiJson({ error: 'Please sign in to use the AI assistant.', code: 'AUTH_REQUIRED' }, 401);
+
+    // Resolve the billable task SERVER-SIDE and reserve credits before the call.
+    const resolved = credits.resolveTask({ prompt, action: body?.action });
+    if (!resolved.ok) return aiJson({ error: `Unknown AI action "${resolved.action}".`, code: 'UNKNOWN_ACTION' }, 400);
+    const reservation = await credits.reserve(env, user, resolved.action, resolved.cost);
+    if (!reservation.ok) {
+      return aiJson({ error: reservation.error, code: reservation.code, credits: reservation.account.credits, required: reservation.cost, plan: reservation.account.plan, action: reservation.action }, reservation.status);
+    }
+    const credit = { action: reservation.action, cost: reservation.cost, balanceAfter: reservation.balanceAfter };
+
+    const call = PROVIDERS[provider];
+    if (!call) {
+      const bal = await credits.refundFailed(env, user, credit, 'unknown_provider');
+      return aiJson({ error: `Unknown AI_PROVIDER "${provider}".`, credits: bal }, 500);
+    }
+
+    const agent = body?.mode === 'agent';
+    const image = hasImage ? { mimeType: typeof img.mimeType === 'string' ? img.mimeType : 'image/png', data: img.data } : null;
+
+    let result;
+    try {
+      result = await call({
+        apiKey: env.AI_API_KEY, model: env.AI_MODEL || '',
+        system: agent ? AGENT_SYSTEM : SYSTEM,
+        prompt, text: typeof body?.text === 'string' ? body.text : '',
+        selection: typeof body?.selection === 'string' ? body.selection : '',
+        image, history: body?.history,
+      });
+    } catch (err) {
+      const bal = await credits.refundFailed(env, user, credit, 'ai_request_failed');
+      return aiJson({ error: err.message || 'AI request failed.', credits: bal }, err.status || 502);
+    }
+
+    // Delivered → settle (audit + return balance). A settlement error must NOT refund.
+    let balance;
+    try { balance = await credits.finalize(env, user, { action: credit.action, cost: credit.cost, model: result.model, usage: result.usage }); }
+    catch { balance = credit.balanceAfter; }
+
+    const meta = { provider, credits: balance, charged: credit.cost, action: credit.action, actionLabel: credits.getActionLabel(credit.action) };
+    const raw = result.text;
+
+    if (agent) {
+      const actions = toActions(extractJson(raw));
+      if (actions && actions.length) return aiJson({ actions, ...meta });
+      const looksJson = /^\s*[[{]/.test(raw || '') || /"action"\s*:/.test(raw || '');
+      if (looksJson) return aiJson({ error: 'The AI response was incomplete — please try again.', incomplete: true, ...meta });
+      return aiJson({ reply: raw || 'The model returned an empty response.', ...meta });
+    }
+    return aiJson({ reply: raw || 'The model returned an empty response.', ...meta });
+  }
+
+  return aiJson({ error: 'Not found.' }, 404);
 }
 
 function withAssetHeaders(res, url) {

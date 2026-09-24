@@ -16,6 +16,7 @@
     "lint": "echo \"No linter configured yet\" && exit 0",
     "verify:advanced-export": "node scripts/verify-advanced-export.mjs",
     "verify:credits": "node scripts/verify-credits.mjs",
+    "verify:worker-credits": "node scripts/verify-worker-credits.mjs",
     "verify:delete": "node scripts/verify-delete.js",
     "verify:docx-formatting": "node scripts/verify-docx-formatting.mjs",
     "verify:docx-highlight": "node scripts/verify-docx-highlight.mjs",

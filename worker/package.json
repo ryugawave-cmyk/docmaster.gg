@@ -1,0 +1,4 @@
+{
+  "//": "Marks the Worker sources as ES modules (import/export). The repo root package.json has no \"type\", so without this Node would parse these .js files as CommonJS. Wrangler bundles them as an ES-module Worker either way.",
+  "type": "module"
+}

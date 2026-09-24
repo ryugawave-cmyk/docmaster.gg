@@ -21,6 +21,27 @@
     "run_worker_first": true
   }
 
+  // ----- Cloud AI + credits (POST /api/ai/* in worker/index.js) -----------
+  // The AI proxy + per-user credit wallet live in the Worker now. To turn it on:
+  //
+  // 1) Create a KV namespace for the credit wallet + audit ledger, then bind it
+  //    (uncomment kv_namespaces below and paste the printed id):
+  //      npx wrangler kv namespace create CREDITS_KV
+  //
+  //    "kv_namespaces": [
+  //      { "binding": "CREDITS_KV", "id": "<your-credits-kv-id>" }
+  //      // add CONTACT_KV here too if you use the contact inbox
+  //    ],
+  //
+  // 2) Set the provider + model as plain vars, and the API KEY as a SECRET:
+  //      // "vars": { "AI_PROVIDER": "gemini", "AI_MODEL": "gemini-3.6-flash" },
+  //      npx wrangler secret put AI_API_KEY
+  //    (Supabase URL + anon key have safe public defaults in worker/auth.js;
+  //     override with SUPABASE_URL / SUPABASE_ANON_KEY vars only if the project moves.)
+  //
+  // Without CREDITS_KV the AI still answers, but balances won't persist (no real
+  // metering). Without AI_API_KEY, /api/ai/chat returns 503 (feature off).
+
   // ----- Contact form (POST /api/contact in worker/index.js) --------------
   // Messages are STORED in KV (browse them under Workers & Pages → KV in the
   // dashboard) and, if a mail provider is set, EMAILED to your inbox.
