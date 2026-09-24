@@ -1,6 +1,9 @@
 'use strict';
 
 const config = require('../config');
+const creditsService = require('../services/credits');
+const creditStore = require('../services/creditStore');
+const creditsConfig = require('../config/credits');
 
 /**
  * AI Assistant proxy (LOCAL / server-side).
@@ -150,24 +153,44 @@ async function callGemini({ apiKey, model, system, prompt, text, selection, imag
   const data = await res.json();
   if (!res.ok) throw providerError(res.status, data);
   const reply = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
-  return reply || '';
+  const u = data?.usageMetadata || {};
+  return {
+    text: reply || '',
+    model: m,
+    usage: {
+      promptTokens: u.promptTokenCount || 0,
+      outputTokens: u.candidatesTokenCount || 0,
+      totalTokens: u.totalTokenCount || 0,
+    },
+  };
 }
 
 async function callOpenAI({ apiKey, model, system, prompt, text, selection, history }) {
+  const m = model || DEFAULT_MODEL.openai;
   const messages = [{ role: 'system', content: system || SYSTEM }];
   for (const t of normaliseHistory(history)) messages.push({ role: t.role, content: t.text });
   messages.push({ role: 'user', content: buildUserContent(prompt, text, selection) });
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: model || DEFAULT_MODEL.openai, messages, max_tokens: 8192 }),
+    body: JSON.stringify({ model: m, messages, max_tokens: 8192 }),
   });
   const data = await res.json();
   if (!res.ok) throw providerError(res.status, data);
-  return (data?.choices?.[0]?.message?.content || '').trim();
+  const u = data?.usage || {};
+  return {
+    text: (data?.choices?.[0]?.message?.content || '').trim(),
+    model: m,
+    usage: {
+      promptTokens: u.prompt_tokens || 0,
+      outputTokens: u.completion_tokens || 0,
+      totalTokens: u.total_tokens || 0,
+    },
+  };
 }
 
 async function callAnthropic({ apiKey, model, system, prompt, text, selection, history }) {
+  const m = model || DEFAULT_MODEL.anthropic;
   const messages = [];
   for (const t of normaliseHistory(history)) messages.push({ role: t.role, content: t.text });
   messages.push({ role: 'user', content: buildUserContent(prompt, text, selection) });
@@ -179,7 +202,7 @@ async function callAnthropic({ apiKey, model, system, prompt, text, selection, h
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: model || DEFAULT_MODEL.anthropic,
+      model: m,
       max_tokens: 8192,
       system: system || SYSTEM,
       messages,
@@ -187,7 +210,16 @@ async function callAnthropic({ apiKey, model, system, prompt, text, selection, h
   });
   const data = await res.json();
   if (!res.ok) throw providerError(res.status, data);
-  return (data?.content?.map((b) => b.text || '').join('') || '').trim();
+  const u = data?.usage || {};
+  return {
+    text: (data?.content?.map((b) => b.text || '').join('') || '').trim(),
+    model: m,
+    usage: {
+      promptTokens: u.input_tokens || 0,
+      outputTokens: u.output_tokens || 0,
+      totalTokens: (u.input_tokens || 0) + (u.output_tokens || 0),
+    },
+  };
 }
 
 const PROVIDERS = { gemini: callGemini, openai: callOpenAI, anthropic: callAnthropic };
@@ -245,10 +277,9 @@ function toActions(value) {
 }
 
 exports.chat = async (req, res) => {
-  if (!config.ai.enabled) {
-    return res.status(503).json({ error: 'AI is not configured. Set AI_API_KEY in .env.' });
-  }
-  const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
+  // By the time we get here the credit middleware has: confirmed AI is enabled,
+  // validated the payload, identified req.user, and RESERVED credits (req.credit).
+  const prompt = req.body.prompt.trim();
   const text = typeof req.body?.text === 'string' ? req.body.text : '';
   const selection = typeof req.body?.selection === 'string' ? req.body.selection : '';
   const history = req.body?.history;
@@ -258,38 +289,115 @@ exports.chat = async (req, res) => {
   const image = img && typeof img.data === 'string' && img.data
     ? { mimeType: typeof img.mimeType === 'string' ? img.mimeType : 'image/png', data: img.data }
     : null;
-  if (!prompt) return res.status(400).json({ error: 'A prompt is required.' });
 
   const provider = PROVIDERS[config.ai.provider];
   if (!provider) {
-    return res.status(500).json({ error: `Unknown AI_PROVIDER "${config.ai.provider}".` });
-  }
-  if (image && config.ai.provider !== 'gemini') {
-    return res.status(400).json({ error: 'Image input is only wired for the Gemini provider right now.' });
+    // Reserved credits are refunded — the request never reached a model.
+    const credits = creditsService.refundFailed(req.user, req.credit, 'unknown_provider');
+    return res.status(500).json({ error: `Unknown AI_PROVIDER "${config.ai.provider}".`, credits });
   }
 
+  // --- Provider call: ONLY a genuine provider failure here refunds credits. ---
+  let result;
   try {
-    const raw = await provider({
+    result = await provider({
       apiKey: config.ai.apiKey,
       model: config.ai.model,
       system: agent ? AGENT_SYSTEM : SYSTEM,
       prompt, text, selection, image, history,
     });
-    if (agent) {
-      // Parse the structured edit list. If the model didn't return JSON, hand the
-      // raw text back so the client can degrade gracefully (insert it as content).
-      const actions = toActions(extractJson(raw));
-      if (actions && actions.length) return res.json({ actions, provider: config.ai.provider });
-      // Couldn't parse a complete action list (often a truncated JSON reply). Flag it
-      // so the client shows a friendly retry message and NEVER inserts the raw JSON.
-      const looksJson = /^\s*[[{]/.test(raw || '') || /"action"\s*:/.test(raw || '');
-      if (looksJson) return res.json({ error: 'The AI response was incomplete — please try again.', incomplete: true, provider: config.ai.provider });
-      return res.json({ reply: raw || 'The model returned an empty response.', provider: config.ai.provider });
-    }
-    return res.json({ reply: raw || 'The model returned an empty response.', provider: config.ai.provider });
   } catch (err) {
-    // Log server-side (never leak the key); return a clean message to the client.
+    // The AI call failed — the user received nothing, so refund the reservation.
     console.error('[AI proxy] request failed:', err.message);
-    return res.status(err.status || 502).json({ error: err.message || 'AI request failed.' });
+    const credits = creditsService.refundFailed(req.user, req.credit, 'ai_request_failed');
+    return res.status(err.status || 502).json({ error: err.message || 'AI request failed.', credits });
   }
+
+  // --- Settlement: the model DID respond, so the request is delivered. Logging /
+  // ledger errors here must NEVER refund a request the user actually received.
+  // (Separated from the provider try/catch above so a finalize failure can't fall
+  // through into the refund path.)
+  const raw = result.text;
+  let credits;
+  try {
+    credits = creditsService.finalize(req.user, {
+      action: req.credit.action,
+      cost: req.credit.cost,
+      model: result.model,
+      usage: result.usage,
+    });
+  } catch (err) {
+    // Best-effort audit only: the charge already stands (deducted at reserve time);
+    // report the post-deduction balance and do NOT refund a delivered response.
+    console.error('[AI proxy] usage settlement failed (response still delivered):', err.message);
+    credits = req.credit.balanceAfter;
+  }
+
+  // What this request actually cost — surfaced so the client can show
+  // "N credits used · M remaining" and which task it was billed as.
+  const charged = req.credit.cost;
+  const action = req.credit.action;
+  const actionLabel = creditsConfig.getActionLabel(action);
+  const meta = { provider: config.ai.provider, credits, charged, action, actionLabel };
+
+  if (agent) {
+    // Parse the structured edit list. If the model didn't return JSON, hand the
+    // raw text back so the client can degrade gracefully (insert it as content).
+    const actions = toActions(extractJson(raw));
+    if (actions && actions.length) return res.json({ actions, ...meta });
+    // Couldn't parse a complete action list (often a truncated JSON reply). Flag it
+    // so the client shows a friendly retry message and NEVER inserts the raw JSON.
+    const looksJson = /^\s*[[{]/.test(raw || '') || /"action"\s*:/.test(raw || '');
+    if (looksJson) return res.json({ error: 'The AI response was incomplete — please try again.', incomplete: true, ...meta });
+    return res.json({ reply: raw || 'The model returned an empty response.', ...meta });
+  }
+  return res.json({ reply: raw || 'The model returned an empty response.', ...meta });
+};
+
+/**
+ * Estimate the credit cost of a request BEFORE running it, so the UI can show
+ * "This action will use approximately N credits." Uses the same server-side
+ * resolver as the real charge, so the estimate always equals the actual cost.
+ * Reads the balance too, so the client knows if the user can afford it.
+ */
+exports.estimate = (req, res) => {
+  const resolved = creditsConfig.resolveTask({ prompt: req.body?.prompt, action: req.body?.action });
+  if (!resolved.ok) {
+    return res.status(400).json({ error: `Unknown AI action "${resolved.action}".`, code: 'UNKNOWN_ACTION' });
+  }
+  const account = creditStore.getAccount(req.user.id, req.user.email);
+  return res.json({
+    action: resolved.action,
+    actionLabel: creditsConfig.getActionLabel(resolved.action),
+    cost: resolved.cost,
+    credits: account.credits,
+    plan: account.plan,
+    sufficient: account.credits >= resolved.cost,
+  });
+};
+
+/**
+ * The task/price catalogue for the "AI Credit Usage" info modal. No auth or
+ * deduction — it's public business info shown on the Pricing page and AI panel.
+ */
+exports.creditInfo = (_req, res) => {
+  return res.json(creditsConfig.creditInfo());
+};
+
+/**
+ * Read-only balance for the header credit badge. Identifies the caller (attachUser
+ * middleware) and returns their current balance + plan. This does NOT deduct,
+ * refund, or otherwise change credit logic — it only reads the wallet.
+ */
+exports.credits = (req, res) => {
+  const account = creditStore.getAccount(req.user.id, req.user.email);
+  const plan = creditsConfig.getPlan(account.plan);
+  return res.json({
+    credits: account.credits,
+    plan: account.plan,
+    planLabel: plan.label,
+    monthlyCredits: plan.monthlyCredits,
+    resetAt: account.resetAt || null,      // when the balance next refills (ISO)
+    resetDays: creditsConfig.RESET_INTERVAL_DAYS,
+  });
 };

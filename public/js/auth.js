@@ -46,6 +46,41 @@
   var modal = null;        // built lazily on first sign-in prompt
   var currentUser = null;  // latest known session user (null when logged out)
 
+  // GA4 sign_up / login. Captured ONCE, at load, before the OAuth params are
+  // stripped from the URL: a `?code=`/`#access_token=` present now means THIS
+  // page load is the redirect back from a fresh Google sign-in — the only moment
+  // an auth event should fire. A plain refresh (session merely restored from
+  // storage) has no such params, so no event is ever double-counted. `authFired`
+  // additionally guards against getSession + onAuthStateChange both resolving.
+  var CAME_FROM_OAUTH = /[?#][^#]*(code=|access_token=)/.test(window.location.href);
+  var authFired = false;
+
+  function gaEvent(name, params) {
+    try {
+      if (typeof window.gtag === 'function') window.gtag('event', name, params || {});
+    } catch (e) { /* a blocked/absent tag must never break sign-in */ }
+  }
+
+  // A brand-new account's first sign-in happens at (or within seconds of) the
+  // moment the account row is created, so created_at ≈ last_sign_in_at. A
+  // returning user signed in long after their account existed. This is how we
+  // tell sign_up (new) from login (returning) on an OAuth provider that has no
+  // explicit "registered vs. logged in" signal.
+  function isNewAccount(user) {
+    var created = Date.parse(user && user.created_at);
+    var lastSignIn = Date.parse(user && user.last_sign_in_at);
+    if (isNaN(created)) return false;      // unknown → treat as returning login
+    if (isNaN(lastSignIn)) return true;    // first sign-in ever
+    return Math.abs(lastSignIn - created) < 10000; // within 10s → same first session
+  }
+
+  function trackAuth(user) {
+    if (authFired || !user) return;
+    authFired = true;
+    if (isNewAccount(user)) gaEvent('sign_up', { method: 'google' });
+    else gaEvent('login', { method: 'google' });
+  }
+
   // Resolves once the initial session lookup completes, so editor-gating clicks
   // that fire before boot don't wrongly bounce an already-signed-in visitor.
   var sessionReady = client.auth.getSession().then(function (res) {
@@ -289,6 +324,12 @@
   gateEditorLinks();
   sessionReady.then(function (user) {
     render(user);
+    // Fire sign_up/login ONLY when this load is the redirect back from a fresh
+    // Google sign-in (OAuth params were present) and a session actually resolved.
+    // Session restore on a plain refresh never satisfies CAME_FROM_OAUTH, so it
+    // is never counted. getSession() awaits the client's URL-detection init, so
+    // the user is available here before we strip the params below.
+    if (CAME_FROM_OAUTH) trackAuth(user);
     // Strip the OAuth ?code=…/#access_token=… from the URL once consumed.
     if (/[?#][^#]*(code=|access_token=)/.test(window.location.href)) {
       history.replaceState({}, document.title, window.location.pathname);

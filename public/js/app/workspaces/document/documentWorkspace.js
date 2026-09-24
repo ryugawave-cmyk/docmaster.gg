@@ -18,6 +18,8 @@ import { createDocumentEditor } from '../../editor/documentEditor.js';
 import { createBlankDocument, createDocument, createParagraph, createRun, createTableBlock, createListBlock, documentToText } from '../../model/documentModel.js';
 import { blockModelToDocx, blockModelToPdf, htmlBlob } from '../../services/convert/blockExport.js';
 import { docxToBlockModel } from '../../services/convert/docxImport.js';
+import { marksFromEl } from '../../model/editableHtml.js';
+import { pptxToBlockModel } from '../../services/convert/pptxImport.js';
 import { createDocExportPanel } from './docExportPanel.js';
 import { openShapePicker } from './docShapePicker.js';
 import { openStampPicker } from './docStampPicker.js';
@@ -208,9 +210,137 @@ export function createDocumentWorkspace({ bus, store, services }) {
         ]),
       ]),
       // Download lives at the top-right of the menu bar (pushed there via CSS).
-      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkAiAssistant(), mkExportMenu()]),
+      el('div', { class: 'doc-menubar__right' }, [mkThemeToggle(), mkCreditBadge(), mkAiAssistant(), mkExportMenu()]),
     );
   }
+
+  /* ---- Header credit badge: remaining AI credits + plan (next to AI Assistant) ---- */
+  const LOW_CREDIT = 10;      // below this → low-balance warning styling + tooltip
+  const CRITICAL_CREDIT = 5;  // below this → stronger "critical" warning styling
+  const credit = { value: null, planLabel: '', hidden: true };
+
+  // Supabase access token (if signed in) for the AI + credit endpoints. The
+  // workspace SPA doesn't load auth.js, but the Supabase session lives in
+  // localStorage under 'aod-auth' on the same origin — read the bearer token from
+  // there. Best-effort: on localhost the server falls back to a dev user, so a
+  // missing token never blocks local use. (Workspace-scoped so the header can read
+  // the balance on load and the AI panel can send authenticated requests.)
+  function aiHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    try {
+      const raw = localStorage.getItem('aod-auth');
+      const sess = raw ? JSON.parse(raw) : null;
+      const token = sess && (sess.access_token || (sess.currentSession && sess.currentSession.access_token));
+      if (token) headers.Authorization = `Bearer ${token}`;
+    } catch { /* no session / unparseable — proceed unauthenticated */ }
+    return headers;
+  }
+
+  // A pill showing the remaining balance + plan. Links to /pricing so a low or empty
+  // balance is one click from upgrading. Hidden until a balance is known (and stays
+  // hidden when AI is off or the visitor isn't signed in).
+  function mkCreditBadge() {
+    const num = el('span', { class: 'doc-credit__num' }, '—');
+    const plan = el('span', { class: 'doc-credit__plan' }, '');
+    ui.creditNum = num; ui.creditPlan = plan;
+    ui.creditBadge = el('a', {
+      class: 'doc-credit', href: '/pricing', hidden: true,
+      'data-tip': 'AI credits', 'aria-label': 'AI credits remaining',
+    }, [
+      el('span', { class: 'doc-credit__ico', html: renderIcon('bolt') }),
+      num, plan,
+    ]);
+    renderCredits();
+    refreshCredits(); // fetch the current balance on load
+    return ui.creditBadge;
+  }
+
+  function renderCredits() {
+    const b = ui.creditBadge;
+    if (!b) return;
+    if (credit.hidden || credit.value == null) { b.hidden = true; return; }
+    b.hidden = false;
+    ui.creditNum.textContent = Number(credit.value).toLocaleString();
+    ui.creditPlan.textContent = credit.planLabel || '';
+    ui.creditPlan.hidden = !credit.planLabel;
+    const empty = credit.value <= 0;
+    const critical = credit.value < CRITICAL_CREDIT && !empty;
+    const low = credit.value < LOW_CREDIT && !critical && !empty;
+    b.classList.toggle('is-low', low);
+    b.classList.toggle('is-critical', critical);
+    b.classList.toggle('is-empty', empty);
+    b.setAttribute('data-tip', empty
+      ? 'Out of AI credits — click to upgrade'
+      : critical
+        ? `Critically low: only ${credit.value} credit${credit.value === 1 ? '' : 's'} left — click to upgrade`
+        : low
+          ? `Low credits: ${credit.value} left — click to upgrade`
+          : `${credit.value} AI credits left${credit.planLabel ? ` · ${credit.planLabel} plan` : ''}`);
+  }
+
+  // Called after every AI response (the number the server returns). The plan label
+  // persists from the initial load fetch.
+  function setCredits(value) {
+    if (typeof value !== 'number') return;
+    credit.value = value;
+    credit.hidden = false;
+    renderCredits();
+  }
+
+  async function refreshCredits() {
+    try {
+      const res = await fetch('/api/ai/credits', { headers: aiHeaders() });
+      if (!res.ok) { credit.hidden = true; renderCredits(); return; } // AI off / not signed in
+      const data = await res.json();
+      credit.value = typeof data.credits === 'number' ? data.credits : null;
+      credit.planLabel = data.planLabel || '';
+      credit.hidden = credit.value == null;
+      renderCredits();
+    } catch { credit.hidden = true; renderCredits(); }
+  }
+
+  // True when we KNOW the balance is exhausted. The server also enforces this with a
+  // 402, but stopping here avoids a pointless round-trip and gives instant feedback.
+  function outOfCredits() { return credit.value != null && credit.value <= 0; }
+  const OUT_OF_CREDITS_MSG = 'You’re out of AI credits. Your balance refills every 3 days — upgrade for more (tap the credits badge or open Pricing).';
+
+  // "AI Credit Usage" info modal (opened by the ⓘ in the AI panel). The task/price
+  // table is fetched from the server (config/credits.js) so it never drifts from
+  // the real prices. Flat cost per task — shown as "N credits".
+  async function openCreditInfoModal() {
+    let info = null;
+    try { const r = await fetch('/api/ai/credit-info'); info = r.ok ? await r.json() : null; } catch { /* offline → empty */ }
+    const groups = (info && info.groups) || [];
+    let overlay;
+    const close = () => { overlay?.remove(); document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    const cost = (n) => `${n} credit${n === 1 ? '' : 's'}`;
+    overlay = el('div', {
+      class: 'credit-info', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'AI credit usage',
+      onMousedown: (e) => { if (e.target === overlay) close(); },
+    }, [
+      el('div', { class: 'credit-info__card', role: 'document' }, [
+        el('div', { class: 'credit-info__head' }, [
+          el('span', { class: 'credit-info__ico', html: renderIcon('bolt') }),
+          el('h2', { class: 'credit-info__title' }, 'AI Credit Usage'),
+          el('button', { class: 'credit-info__x', type: 'button', 'aria-label': 'Close', onClick: close }, '✕'),
+        ]),
+        el('div', { class: 'credit-info__groups' }, groups.map((g) => el('div', { class: 'credit-info__group' }, [
+          el('div', { class: 'credit-info__group-title' }, g.title),
+          el('ul', { class: 'credit-info__list' }, (g.items || []).map((it) => el('li', { class: 'credit-info__row' }, [
+            el('span', { class: 'credit-info__label' }, it.label),
+            el('span', { class: 'credit-info__cost' }, cost(it.cost)),
+          ]))),
+        ]))),
+        el('p', { class: 'credit-info__note' }, 'Charged once per task — you’ll see the estimate before it runs and the exact amount after.'),
+      ]),
+    ]);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey, true);
+    overlay.querySelector('.credit-info__x')?.focus();
+  }
+  // Reachable from the shell (e.g. a Pricing-page deep link) if ever needed.
+  ui.openCreditInfoModal = openCreditInfoModal;
 
   // AI Assistant: a gradient-glow button at the top-right (next to Export) that
   // opens the assistant — a docked right sidebar for the conversation plus a small
@@ -263,12 +393,16 @@ export function createDocumentWorkspace({ bus, store, services }) {
       const body = el('div', { class: 'doc-ai__msg-text' }, text);
       const children = [body];
       let insertBtn = null;
+      let meta = null;
       if (who === 'ai') {
         insertBtn = el('button', {
           class: 'doc-ai__insert', type: 'button', hidden: true,
           onClick: () => insertIntoDoc(body.textContent || ''),
         }, 'Insert into document');
         children.push(insertBtn);
+        // A small muted line for the credit cost (estimate before / used after).
+        meta = el('div', { class: 'doc-ai__meta', hidden: true });
+        children.push(meta);
       }
       const bubble = el('div', { class: `doc-ai__msg doc-ai__msg--${who}` }, children);
       ui.aiEmpty?.remove(); ui.aiEmpty = null; // drop the empty-state hint on first message
@@ -282,8 +416,21 @@ export function createDocumentWorkspace({ bus, store, services }) {
           if (insertBtn) insertBtn.hidden = !insertable;
           msgs.scrollTop = msgs.scrollHeight;
         },
+        setMeta(t) {
+          if (!meta) return;
+          meta.textContent = t || '';
+          meta.hidden = !t;
+          msgs.scrollTop = msgs.scrollHeight;
+        },
       };
     };
+
+    // Show the out-of-credits message in the assistant panel (opening it if needed),
+    // so blocked actions from the floating toolbar / image upload still give feedback.
+    function notifyOutOfCredits() {
+      if (!root.classList.contains('is-ai-open')) toggleAiPanel();
+      addMsg('ai', OUT_OF_CREDITS_MSG);
+    }
 
     const input = el('textarea', {
       class: 'doc-ai__input', rows: '1', placeholder: 'Ask the AI to help with your document…',
@@ -299,6 +446,53 @@ export function createDocumentWorkspace({ bus, store, services }) {
 
     function docText() {
       try { return documentToText(editor.getModel()).replace(/\n{2,}/g, '\n').trim(); } catch { return ''; }
+    }
+    // True when the open document actually has text (a file the user uploaded, or
+    // typed content) — so whole-document AI edits have something to act on.
+    function hasDocContent() {
+      try { return (editor.getBlockEls() || []).some((b) => (b.textContent || '').trim()); }
+      catch { return false; }
+    }
+
+    /* ---- inherit the document's LOOK so AI-written text matches the upload ----
+     * AI replies become fresh runs with the editor defaults (Inter/16/#111). On an
+     * uploaded doc (its own font/size/colour) that makes the new text look wrong.
+     * We sample the "look" marks from the text being replaced (or the document's
+     * body) and apply them to the new runs, so a rewrite keeps the same typeface. */
+    // Font family / size / colour of the first real text inside a block element.
+    function sampleMarksFromEl(elx) {
+      if (!elx) return null;
+      try {
+        const w = document.createTreeWalker(elx, NodeFilter.SHOW_TEXT);
+        let n; while ((n = w.nextNode())) { if ((n.textContent || '').trim()) return marksFromEl(n.parentElement); }
+        return marksFromEl(elx);
+      } catch { return null; }
+    }
+    // Keep only the "look" marks — bold/italic come from the AI's own markup.
+    const styleMarks = (m) => (m ? { fontFamily: m.fontFamily, fontSize: m.fontSize, color: m.color } : null);
+    // The element at a range's start (for sampling a selection's formatting).
+    function rangeEl(range) { let n = range && range.startContainer; if (n && n.nodeType === 3) n = n.parentElement; return n || null; }
+    // The document's body look: the first non-heading paragraph with text (falls
+    // back to any block with text). The template for inserted/rewritten prose.
+    function docBaseMarks() {
+      try {
+        const els = editor.getBlockEls ? editor.getBlockEls() : [];
+        const p = els.find((e) => /^p$/i.test(e.tagName) && (e.textContent || '').trim())
+          || els.find((e) => (e.textContent || '').trim());
+        return styleMarks(sampleMarksFromEl(p));
+      } catch { return null; }
+    }
+    // The body look of a named section (or the doc body if it can't be sampled).
+    function baseForTarget(target) {
+      if (target && target !== 'cursor' && target !== 'end' && target !== 'selection') {
+        const sec = findSectionEls(target);
+        if (sec && sec.length) {
+          const bodyEl = sec.find((e) => /^p$/i.test(e.tagName) && (e.textContent || '').trim()) || sec[sec.length - 1];
+          const m = styleMarks(sampleMarksFromEl(bodyEl));
+          if (m) return m;
+        }
+      }
+      return docBaseMarks();
     }
     // Deterministic asks (word/character count, reading time) are answered locally
     // and instantly — no network round-trip. Returns null when the ask needs the
@@ -316,19 +510,58 @@ export function createDocumentWorkspace({ bus, store, services }) {
       return null;
     }
 
+    // Every AI response carries the caller's remaining credits — push it to the
+    // header badge so the balance stays live after each request. (aiHeaders and the
+    // badge live at workspace scope; see mkCreditBadge above.)
+    function noteCredits(data) { if (data && typeof data.credits === 'number') setCredits(data.credits); }
+
+    // Pre-flight cost. Asks the server (same resolver as the charge) what this
+    // prompt will cost and whether the user can afford it — so the estimate shown
+    // ALWAYS equals what gets billed. Returns null if the estimate can't be fetched
+    // (we then just proceed; the /chat call still enforces credits server-side).
+    async function estimateAgent(prompt) {
+      try {
+        const res = await fetch('/api/ai/estimate', {
+          method: 'POST', headers: aiHeaders(), body: JSON.stringify({ prompt }),
+        });
+        const data = await res.json().catch(() => null);
+        noteCredits(data);
+        return res.ok ? data : null;
+      } catch { return null; }
+    }
+    const plural = (n) => (n === 1 ? '' : 's');
+    // "12 credits used · 6 left" — the after-completion line (spec: credits used +
+    // remaining). Built from the fields /chat returns on every response.
+    function usedMetaText(data) {
+      if (!data || typeof data.charged !== 'number') return '';
+      const left = typeof data.credits === 'number' ? ` · ${data.credits} left` : '';
+      return `${data.charged} credit${plural(data.charged)} used${left}`;
+    }
+
     // Ask the server-side proxy (/api/ai/chat), which holds the API key and calls
     // the configured model. The key never touches the browser. `contextText` lets a
     // caller override the document context (e.g. '' for fresh generation/edits).
-    async function askModel(prompt, contextText, image) {
+    // `action` names the AI-Writer action so the server charges the right credits.
+    async function askModel(prompt, contextText, image, action) {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, text: contextText != null ? contextText : docText(), image: image || null }),
+        headers: aiHeaders(),
+        body: JSON.stringify({ prompt, text: contextText != null ? contextText : docText(), image: image || null, action }),
       });
       let data = null;
       try { data = await res.json(); } catch { /* non-JSON error body */ }
+      noteCredits(data);
+      if (res.status === 402 || data?.code === 'INSUFFICIENT_CREDITS') throw creditError(data);
       if (!res.ok) throw new Error(data?.error || `Request failed (${res.status}).`);
       return data?.reply || 'The model returned an empty response.';
+    }
+
+    // Build an error tagged so callers show the upgrade prompt (not a generic
+    // "couldn't reach the service" message) when the server blocks for no credits.
+    function creditError(data) {
+      const e = new Error((data && data.error) || OUT_OF_CREDITS_MSG);
+      e.code = 'INSUFFICIENT_CREDITS';
+      return e;
     }
 
     // Upload a document/form image → the multimodal model reads it and rebuilds the
@@ -336,6 +569,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
     // as "____", markdown tables). Honest caveat: this recreates the CONTENT and
     // structure, not a pixel-perfect image of the original.
     function importImage(file) {
+      if (outOfCredits()) { notifyOutOfCredits(); return; } // stop before spending
       const reader = new FileReader();
       reader.onload = async () => {
         const dataUrl = String(reader.result || '');
@@ -351,11 +585,12 @@ export function createDocumentWorkspace({ bus, store, services }) {
           'Output ONLY the recreated content — no preamble or explanation.',
         ].join(' ');
         try {
-          const reply = await askModel(modelPrompt, '', { mimeType: m[1], data: m[2] });
+          const reply = await askModel(modelPrompt, '', { mimeType: m[1], data: m[2] }, 'large_document_analysis');
           insertIntoDoc(reply);
           thinking.setText('✓ Recreated the document as editable content on the page.', false);
         } catch (err) {
-          thinking.setText(`Sorry — I couldn't read the document. ${err?.message || ''}`.trim(), false);
+          if (err && err.code === 'INSUFFICIENT_CREDITS') thinking.setText(err.message || OUT_OF_CREDITS_MSG, false);
+          else thinking.setText(`Sorry — I couldn't read the document. ${err?.message || ''}`.trim(), false);
         }
       };
       reader.readAsDataURL(file);
@@ -403,11 +638,13 @@ export function createDocumentWorkspace({ bus, store, services }) {
     // affected block element(s) so a follow-up refine targets the SAME part.
     function replaceSelection(newText) {
       if (!editSel || !editor) return null;
+      // Match the look of the text being replaced (fall back to the doc body).
+      const base = styleMarks(sampleMarksFromEl(rangeEl(editSel.range))) || docBaseMarks();
       try {
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(editSel.range);
-        return editor.replaceSelectionWithBlocks(textToBlocks((newText || '').trim()));
+        return editor.replaceSelectionWithBlocks(textToBlocks((newText || '').trim(), base));
       } catch { return null; }
       finally { editSel = null; if (ui.aiInput) ui.aiInput.placeholder = DEFAULT_PH; }
     }
@@ -478,14 +715,19 @@ export function createDocumentWorkspace({ bus, store, services }) {
     async function submitSel() {
       const instr = (selInput.value || '').trim();
       if (!instr || !editSel || !editSel.text) return;
+      // Out of credits → stop and surface the upgrade prompt in the AI panel.
+      if (outOfCredits()) { hideSelbar(); notifyOutOfCredits(); return; }
       const target = editSel.text;
       selInput.value = ''; selInput.disabled = true;
       try {
         const modelPrompt = `Rewrite the text below according to this instruction: "${instr}". Return ONLY the rewritten text as clean plain text — no markdown, no LaTeX, no JSON, no quotes, no explanation.\n\nText:\n${target}`;
-        const reply = await askModel(modelPrompt, '');
+        const reply = await askModel(modelPrompt, '', null, 'text_rewrite');
         const els = replaceSelection(reply); // restores the range + replaces in place
         if (els && els.length) lastAiBlocks = els; // a follow-up "make it shorter" refines this
-      } catch { /* leave the selection so the user can retry */ }
+      } catch (err) {
+        if (err && err.code === 'INSUFFICIENT_CREDITS') notifyOutOfCredits();
+        /* else: leave the selection so the user can retry */
+      }
       finally { selInput.disabled = false; hideSelbar(); }
     }
 
@@ -504,13 +746,14 @@ export function createDocumentWorkspace({ bus, store, services }) {
 
     // Ask the agent endpoint. Returns { actions } (structured edits) or { reply }
     // (plain text, when the model didn't produce JSON — we degrade gracefully).
-    async function askAgent(prompt) {
+    async function askAgent(prompt, action) {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiHeaders(),
         body: JSON.stringify({
           mode: 'agent',
           prompt,
+          action,
           text: docText(),
           selection: (editSel && editSel.text) || '',
           history: history.slice(-8),
@@ -518,6 +761,8 @@ export function createDocumentWorkspace({ bus, store, services }) {
       });
       let data = null;
       try { data = await res.json(); } catch { /* non-JSON error body */ }
+      noteCredits(data);
+      if (res.status === 402 || data?.code === 'INSUFFICIENT_CREDITS') throw creditError(data);
       if (!res.ok) throw new Error(data?.error || `Request failed (${res.status}).`);
       return data || {};
     }
@@ -601,8 +846,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
       } catch { return false; }
     }
 
-    // Build a table block from { headers, rows }. The header row is bold.
-    function tableBlockFrom(headers, rows) {
+    // Build a table block from { headers, rows }. The header row is bold. `base`
+    // (optional) is the document's look, so cells inherit the doc font/size/colour.
+    function tableBlockFrom(headers, rows, base) {
       const body = [];
       const head = Array.isArray(headers) ? headers.map((h) => String(h == null ? '' : h)) : [];
       if (head.length) body.push({ cells: head, header: true });
@@ -616,16 +862,16 @@ export function createDocumentWorkspace({ bus, store, services }) {
         for (let ci = 0; ci < nCols; ci += 1) {
           // Clean each cell too (LaTeX / fences / stray markup), like paragraph text.
           const val = cleanInline(r.cells[ci] != null ? r.cells[ci] : '');
-          tbl.rows[ri][ci] = { runs: r.header ? [createRun(stripStray(val), { bold: true })] : parseInline(val) };
+          tbl.rows[ri][ci] = { runs: r.header ? [createRun(stripStray(val), { ...(base || {}), bold: true })] : parseInline(val, base) };
         }
       });
       return tbl;
     }
 
-    function listBlockFrom(items, ordered) {
+    function listBlockFrom(items, ordered, base) {
       const list = (Array.isArray(items) ? items : []).map((t) => String(t == null ? '' : t)).filter((t) => t.trim());
       if (!list.length) return null;
-      return createListBlock({ ordered: !!ordered, items: list.map((t) => ({ runs: parseInline(cleanInline(t).replace(/^\s*[-*•]\s+|^\s*\d+[.)]\s+/, '')) })) });
+      return createListBlock({ ordered: !!ordered, items: list.map((t) => ({ runs: parseInline(cleanInline(t).replace(/^\s*[-*•]\s+|^\s*\d+[.)]\s+/, ''), base) })) });
     }
 
     // Apply one format spec to the current selection or a named section.
@@ -656,15 +902,18 @@ export function createDocumentWorkspace({ bus, store, services }) {
       const content = typeof a.content === 'string' ? a.content : '';
       const target = typeof a.target === 'string' ? a.target : '';
       const remember = (els) => { if (els && els.length) lastAiBlocks = els; return els; };
+      // The document's look for this edit, so new text matches the existing font
+      // (sampled from the targeted section, or the doc body when there's no target).
+      const base = baseForTarget(target);
       switch (action) {
         case 'insert_text': {
-          const blocks = textToBlocks(content);
+          const blocks = textToBlocks(content, base);
           if (!blocks.length) return null;
           remember(target === 'end' ? editor.insertBlocksRelative(blocks, lastBlockEl(), 'after') : editor.insertBlocks(blocks));
           return 'Added the content to your document.';
         }
         case 'summarize': {
-          const blocks = textToBlocks(content);
+          const blocks = textToBlocks(content, base);
           if (!blocks.length) return null;
           if (target && target !== 'cursor' && target !== 'end') {
             const sec = findSectionEls(target);
@@ -674,15 +923,15 @@ export function createDocumentWorkspace({ bus, store, services }) {
           return 'Added a summary.';
         }
         case 'replace_selection': {
-          const blocks = textToBlocks(content);
-          if (!blocks.length) return null;
           const els = replaceSelection(content);
           if (els && els.length) { lastAiBlocks = els; return 'Replaced the selected text.'; }
+          const blocks = textToBlocks(content, base);
+          if (!blocks.length) return null;
           remember(editor.insertBlocks(blocks));
           return 'Inserted the text.';
         }
         case 'replace_section': {
-          const blocks = textToBlocks(content);
+          const blocks = textToBlocks(content, base);
           if (!blocks.length) return null;
           const sec = findSectionEls(target);
           if (sec) { const els = editor.replaceBlocks(sec, blocks); if (els && els.length) { lastAiBlocks = els; return `Rewrote “${target}”.`; } }
@@ -699,7 +948,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
         }
         case 'insert_after':
         case 'insert_before': {
-          const blocks = textToBlocks(content);
+          const blocks = textToBlocks(content, base);
           if (!blocks.length) return null;
           const where = action === 'insert_before' ? 'before' : 'after';
           const sec = findSectionEls(target);
@@ -708,25 +957,27 @@ export function createDocumentWorkspace({ bus, store, services }) {
           return sec ? `Inserted content ${where} “${target}”.` : 'Added the content to your document.';
         }
         case 'replace_all': {
-          const blocks = textToBlocks(content);
+          // Sample the body look BEFORE wiping the doc so the rewrite keeps the font.
+          const blocks = textToBlocks(content, docBaseMarks());
           if (!blocks.length) return null;
           const all = editor.getBlockEls();
           remember(all.length ? editor.replaceBlocks(all, blocks) : editor.insertBlocks(blocks));
           return 'Rewrote the document.';
         }
         case 'create_table': {
-          const tbl = tableBlockFrom(a.headers, a.rows);
+          const tbl = tableBlockFrom(a.headers, a.rows, base);
           if (!tbl) return null;
           remember(editor.insertBlocks([tbl]));
           return 'Inserted a table.';
         }
         case 'create_heading': {
           const lvl = Math.min(3, Math.max(1, parseInt(a.level, 10) || 2));
-          remember(editor.insertBlocks([createParagraph({ tag: `h${lvl}`, runs: parseInline(cleanInline(content)) })]));
+          const hBase = base && base.fontFamily ? { fontFamily: base.fontFamily } : null;
+          remember(editor.insertBlocks([createParagraph({ tag: `h${lvl}`, runs: parseInline(cleanInline(content), hBase) })]));
           return 'Added a heading.';
         }
         case 'create_list': {
-          const list = listBlockFrom(a.items, a.ordered);
+          const list = listBlockFrom(a.items, a.ordered, base);
           if (!list) return null;
           remember(editor.insertBlocks([list]));
           return 'Inserted a list.';
@@ -784,7 +1035,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
         '', 'Text:', current,
       ].join('\n');
       const reply = await askModel(modelPrompt, '');
-      const blocks = textToBlocks(reply);
+      // Keep the look of the block(s) being revised (fall back to the doc body).
+      const base = styleMarks(sampleMarksFromEl(lastAiBlocks && lastAiBlocks[0])) || docBaseMarks();
+      const blocks = textToBlocks(reply, base);
       const newEls = blocks.length ? editor.replaceBlocks(lastAiBlocks, blocks) : null;
       if (newEls && newEls.length) { lastAiBlocks = newEls; thinking.setText('✓ Updated that part.', false); }
       else { const els = insertIntoDoc(reply); thinking.setText(els ? '✓ Written into your document.' : 'Sorry — I could not apply that change.', false); }
@@ -807,6 +1060,10 @@ export function createDocumentWorkspace({ bus, store, services }) {
         return;
       }
 
+      // Out of credits → stop before calling the model (the server would also block
+      // with a 402). Local answers above stay free, so they still work at zero.
+      if (outOfCredits()) { addMsg('ai', OUT_OF_CREDITS_MSG); return; }
+
       const hadSelection = !!(editSel && editSel.text);
       // "improve/rewrite/shorten … that part/it" with NO selection but a live last-AI
       // block → refine THAT block in place (auto-delete + refill), not a new copy.
@@ -815,16 +1072,41 @@ export function createDocumentWorkspace({ bus, store, services }) {
         && !/\b(whole|entire|full)\b/i.test(display) // explicit whole-doc → agent replace_all
         && (refersToLast(display) || lastCoversWholeDoc());
 
+      // No selection and nothing AI-written to refine, but the user typed an
+      // improve/rewrite/analyse instruction that doesn't name a specific part and
+      // isn't a fresh-generation request → they mean the WHOLE open document (e.g.
+      // a file they just uploaded). Nudge the agent to rewrite it in place with
+      // replace_all (keeping headings/tables) rather than guessing a target.
+      const wantWholeDocEdit = !hadSelection && !wantRefine && hasDocContent()
+        && REFINE_INTENT.test(display) && !FRESH_INTENT.test(display) && !namesPart(display);
+
       const thinking = addMsg('ai', '…');
       try {
         if (wantRefine) { await runRefine(display, thinking); return; }
-        const data = await askAgent(display);
+        // Show the estimated cost BEFORE generating (spec). Same resolver as the
+        // charge, so this number is exactly what will be billed. Block early with
+        // the upgrade prompt when the balance can't cover it (saves a wasted call).
+        const est = await estimateAgent(display);
+        if (est && est.sufficient === false) {
+          thinking.setText(OUT_OF_CREDITS_MSG, false);
+          thinking.setMeta(`Needs ${est.cost} credit${plural(est.cost)} · you have ${est.credits}`);
+          return;
+        }
+        if (est) thinking.setMeta(`Estimated ~${est.cost} credit${plural(est.cost)} · ${est.actionLabel}`);
+        // For a whole-document improve with no explicit "whole/entire/document" word,
+        // spell out the target so the agent applies it to everything (replace_all).
+        const agentPrompt = wantWholeDocEdit && !/\b(whole|entire|full|document|page|everything)\b/i.test(display)
+          ? `${display}\n\n(Apply this to the ENTIRE document and rewrite it in place with replace_all, preserving its headings, structure and tables.)`
+          : display;
+        const data = await askAgent(agentPrompt);
         // The server flags a truncated/unparseable action reply — show a friendly
         // retry, never dump raw JSON into the document.
         if (data.incomplete || (data.error && !data.reply && !data.actions)) {
           thinking.setText(data.error || 'The AI response was incomplete — please try again.', false);
           return;
         }
+        // Replace the estimate with what was ACTUALLY charged + the new balance.
+        thinking.setMeta(usedMetaText(data));
         let actions = Array.isArray(data.actions) && data.actions.length ? data.actions : null;
         const reply = data.reply || '';
         // Defense in depth: if the plain reply is actually a JSON action blob, parse
@@ -855,7 +1137,8 @@ export function createDocumentWorkspace({ bus, store, services }) {
           pushHistory('user', display); pushHistory('assistant', reply);
         }
       } catch (err) {
-        thinking.setText(`Sorry — I couldn't reach the AI service. ${err?.message || ''}`.trim(), false);
+        if (err && err.code === 'INSUFFICIENT_CREDITS') thinking.setText(err.message || OUT_OF_CREDITS_MSG, false);
+        else thinking.setText(`Sorry — I couldn't reach the AI service. ${err?.message || ''}`.trim(), false);
       }
     }
 
@@ -880,6 +1163,25 @@ export function createDocumentWorkspace({ bus, store, services }) {
       runAgent(`Write ${t.kind} about: ${topic}`);
     }
 
+    // Document actions: one-click AI edits that act on the CURRENTLY OPEN document
+    // (a file the user uploaded, or their own writing) — improve, fix, shorten or
+    // analyse the whole thing with no selection needed. They run the same agent with
+    // an explicit whole-document instruction, so edits apply in place (replace_all).
+    const DOC_ACTIONS = [
+      { label: 'Improve writing', instr: 'Improve the writing quality of the entire document — make it clearer, more engaging and polished — while preserving its meaning, structure, headings and any tables. Rewrite the whole document in place.' },
+      { label: 'Fix grammar', instr: 'Correct every grammar, spelling and punctuation mistake in the entire document. Keep the original wording and meaning; only fix errors. Rewrite the whole document in place.' },
+      { label: 'Shorten', instr: 'Make the entire document more concise while keeping all the key information, headings and tables. Rewrite the whole document in place.' },
+      { label: 'Analyze', instr: 'Analyze the whole document and reply with feedback only — its strengths, weaknesses, clarity, tone, structure and concrete suggestions to improve it. Do NOT change the document.' },
+    ];
+    function runDocAction(a) {
+      if (!hasDocContent()) {
+        if (!root.classList.contains('is-ai-open')) toggleAiPanel();
+        addMsg('ai', 'Open or upload a document first, then I can improve or analyze it. You can also select any text and tell me how to change it.');
+        return;
+      }
+      runAgent(a.instr);
+    }
+
     // Turn an AI reply into paragraph blocks and write them into the page at the
     // caret as a single undoable edit (keeps the rest of the doc + undo history).
     // Remembers the inserted blocks as `lastAiBlocks` so a follow-up "make it
@@ -887,7 +1189,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
     function insertIntoDoc(text) {
       const clean = (text || '').trim();
       if (!clean || !editor) return null;
-      const blocks = textToBlocks(clean);
+      const blocks = textToBlocks(clean, docBaseMarks());
       if (!blocks.length) return null;
       const els = editor.insertBlocks(blocks);
       lastAiBlocks = els && els.length ? els : null;
@@ -935,7 +1237,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
     // Clean AI content → block model. Markdown tables become NATIVE tables; `#`/`##`/
     // `###` (and a whole-line bold, or "Title:") become headings; LaTeX/fences are
     // stripped; **bold**/*italic* become marks. Never leaves raw markup in the doc.
-    function textToBlocks(text) {
+    // `base` (optional) = the document's look ({fontFamily,fontSize,color}); new runs
+    // inherit it so a rewrite matches the uploaded doc instead of the editor default.
+    function textToBlocks(text, base) {
       const src = cleanContent(text);
       const lines = src.split(/\r?\n/);
       const blocks = [];
@@ -947,7 +1251,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
           i += 2;
           while (i < lines.length && isTableRow(lines[i]) && !isTableSep(lines[i])) { rows.push(splitRow(lines[i])); i += 1; }
           i -= 1; // the for-loop will advance past the last consumed row
-          const tbl = tableBlockFrom(header, rows);
+          const tbl = tableBlockFrom(header, rows, base);
           if (tbl) blocks.push(tbl);
           continue;
         }
@@ -960,18 +1264,22 @@ export function createDocumentWorkspace({ bus, store, services }) {
         if (h) { tag = `h${h[1].length}`; content = h[2]; }
         else if (/^title:\s*/i.test(line)) { tag = 'h1'; content = line.replace(/^title:\s*/i, ''); }
         else if (boldOnly && boldOnly[2].length <= 80) { tag = 'h2'; content = boldOnly[2]; }
-        blocks.push(createParagraph({ tag, runs: parseInline(content) }));
+        // Paragraphs take the full body look; headings inherit only the typeface
+        // (their size + colour come from the heading tag, which we must not override).
+        const runsBase = tag === 'p' ? base : (base && base.fontFamily ? { fontFamily: base.fontFamily } : null);
+        blocks.push(createParagraph({ tag, runs: parseInline(content, runsBase) }));
       }
       return blocks;
     }
 
     // Inline markdown → runs: **bold**/__bold__ and *italic*/_italic_ become marks;
     // any leftover/stray emphasis markers are stripped so they never show as raw text.
-    function parseInline(str) {
+    // `base` marks (font/size/colour) are applied UNDER the inline bold/italic marks.
+    function parseInline(str, base) {
       const runs = [];
       const re = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3/g;
       let last = 0; let m;
-      const push = (t, marks) => { const clean = stripStray(t); if (clean) runs.push(createRun(clean, marks)); };
+      const push = (t, marks) => { const clean = stripStray(t); if (clean) runs.push(createRun(clean, { ...(base || {}), ...marks })); };
       while ((m = re.exec(str))) {
         if (m.index > last) push(str.slice(last, m.index));
         if (m[2] != null) push(m[2], { bold: true });
@@ -979,7 +1287,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
         last = re.lastIndex;
       }
       if (last < str.length) push(str.slice(last));
-      return runs.length ? runs : [createRun(stripStray(str))];
+      return runs.length ? runs : [createRun(stripStray(str), base || {})];
     }
     // Remove stray/unpaired markdown emphasis + heading marks so no raw syntax leaks.
     function stripStray(t) {
@@ -991,7 +1299,9 @@ export function createDocumentWorkspace({ bus, store, services }) {
     ui.aiEmpty = el('div', { class: 'doc-ai__empty' }, [
       el('div', { class: 'doc-ai__empty-ico', html: renderIcon('sparkle') }),
       el('div', { class: 'doc-ai__empty-title' }, 'Ask AI anything'),
-      el('div', { class: 'doc-ai__empty-sub' }, 'Write, edit, or ask about your document. Type below or pick a task.'),
+      el('div', { class: 'doc-ai__empty-sub' }, 'Improve or analyze your document, select any text to rewrite it in place, or ask me to write something new.'),
+      el('div', { class: 'doc-ai__empty-actions' },
+        DOC_ACTIONS.map((a) => el('button', { class: 'doc-ai-task doc-ai-task--edit', type: 'button', onClick: () => runDocAction(a) }, a.label))),
     ]);
     msgs.appendChild(ui.aiEmpty);
     const sidebar = el('aside', { class: 'doc-ai-sidebar', 'aria-label': 'AI Assistant conversation' }, [
@@ -1001,6 +1311,11 @@ export function createDocumentWorkspace({ bus, store, services }) {
           el('span', {}, 'AI Assistant'),
         ]),
         el('div', { class: 'doc-ai-side__tools' }, [
+          el('button', {
+            class: 'doc-ai-side__tool doc-ai-side__info', type: 'button',
+            'data-tip': 'Credit usage', 'aria-label': 'AI credit usage',
+            onClick: () => openCreditInfoModal(),
+          }, 'ⓘ'),
           el('button', {
             class: 'doc-ai-side__tool', type: 'button', 'data-tip': 'New chat', 'aria-label': 'New chat',
             onClick: () => { msgs.replaceChildren(); ui.aiEmpty && msgs.appendChild(ui.aiEmpty); },
@@ -1018,8 +1333,14 @@ export function createDocumentWorkspace({ bus, store, services }) {
 
     // ---- Bottom PROMPT BAR. Suggestion chips are hidden behind the `+` button;
     // a `+`(tasks) and an image-upload button sit at the left of the pill. ----
-    const tasks = el('div', { class: 'doc-ai-tasks' },
-      TASKS.map((t) => el('button', { class: 'doc-ai-task', type: 'button', onClick: () => { runTask(t); dock.classList.remove('is-tasks-open'); } }, t.label)));
+    const tasks = el('div', { class: 'doc-ai-tasks' }, [
+      el('div', { class: 'doc-ai-tasks__label' }, 'Edit this document'),
+      el('div', { class: 'doc-ai-tasks__row' },
+        DOC_ACTIONS.map((a) => el('button', { class: 'doc-ai-task doc-ai-task--edit', type: 'button', onClick: () => { runDocAction(a); dock.classList.remove('is-tasks-open'); } }, a.label))),
+      el('div', { class: 'doc-ai-tasks__label' }, 'Create new'),
+      el('div', { class: 'doc-ai-tasks__row' },
+        TASKS.map((t) => el('button', { class: 'doc-ai-task', type: 'button', onClick: () => { runTask(t); dock.classList.remove('is-tasks-open'); } }, t.label))),
+    ]);
 
     const moreBtn = el('button', {
       class: 'doc-ai-bar__more', type: 'button', 'aria-label': 'Show tasks', 'data-tip': 'Tasks',
@@ -1980,12 +2301,19 @@ export function createDocumentWorkspace({ bus, store, services }) {
     if (/\.docx$/i.test(name)) {
       const buf = await file.arrayBuffer();
       loadDoc(await docxToBlockModel(buf, name.replace(/\.docx$/i, '')), name);
+    } else if (/\.pptx$/i.test(name)) {
+      // PowerPoint → editable document: each slide becomes a heading + its
+      // bullets/tables (see services/convert/pptxImport.js).
+      const buf = await file.arrayBuffer();
+      loadDoc(await pptxToBlockModel(buf, name.replace(/\.pptx$/i, '')), name);
     } else if (/\.(txt|md|markdown)$/i.test(name) || (file.type || '').startsWith('text/')) {
       loadDoc(textToDoc(await file.text(), name), name);
     } else if (/\.doc$/i.test(name)) {
       bus.emit('toast', 'Legacy .doc isn’t supported — save it as .docx and try again.');
+    } else if (/\.ppt$/i.test(name)) {
+      bus.emit('toast', 'Legacy .ppt isn’t supported — save it as .pptx and try again.');
     } else {
-      bus.emit('toast', 'Open a Word (.docx), text or Markdown file in the Document editor.');
+      bus.emit('toast', 'Open a Word (.docx), PowerPoint (.pptx), text or Markdown file in the Document editor.');
     }
   }
 
@@ -2011,7 +2339,7 @@ export function createDocumentWorkspace({ bus, store, services }) {
     id: 'document',
     label: 'Document',
     icon: 'document',
-    accepts: (f) => f && /\.(docx?|txt|md|markdown)$/i.test(f.name || '') || /^text\//.test((f && f.type) || ''),
+    accepts: (f) => f && /\.(docx?|pptx?|txt|md|markdown)$/i.test(f.name || '') || /^text\//.test((f && f.type) || ''),
 
     mount,
     activate() {

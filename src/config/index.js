@@ -55,6 +55,28 @@ const config = {
     get enabled() { return Boolean(this.apiKey); },
   },
 
+  // Auth (Supabase). The browser signs in with Google via Supabase using the
+  // PUBLISHABLE (anon) key; the server verifies a user's access token against the
+  // same project to identify who is spending credits. The anon key is NOT a secret
+  // — it is designed to be public — so a safe default is baked in for local dev.
+  // `devUserId`, when set (or on localhost), lets the credit system attribute
+  // requests to a stub user so the flow is testable without a live Supabase session.
+  auth: {
+    supabaseUrl: process.env.SUPABASE_URL || 'https://synosgiafpeidtvjnnkk.supabase.co',
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || 'sb_publishable_6s1pPaUCFkp-SxDz790Krw_TpulJekK',
+    // Allow an unauthenticated caller to be treated as this stub user (dev/testing).
+    // Empty in production; localhost is always allowed to fall back to a dev user.
+    devUserId: process.env.DEV_USER_ID || '',
+    devUserEmail: process.env.DEV_USER_EMAIL || 'dev@localhost',
+  },
+
+  // Admin analytics gate. The usage dashboard at /admin/usage is open on localhost
+  // (your own dev box) and requires ?token=…/x-admin-token elsewhere. Reuses the
+  // contact admin token unless a dedicated ADMIN_TOKEN is set.
+  admin: {
+    token: process.env.ADMIN_TOKEN || process.env.CONTACT_ADMIN_TOKEN || '',
+  },
+
   // Contact form backend. Submissions are always stored durably (a local JSONL
   // file in dev; Cloudflare KV in the Worker) and — if an email provider key is
   // set — also forwarded to the owner's inbox.
@@ -111,5 +133,15 @@ const config = {
     ],
   },
 };
+
+// Startup safety: DEV_USER_ID enables an UNAUTHENTICATED identity fallback (a stub
+// user for local testing). It must never be set in production — refuse to boot if
+// it is, so a stray env var can't silently open a credit-bypass hole.
+if (config.isProduction && config.auth.devUserId) {
+  throw new Error(
+    'DEV_USER_ID must not be set in production: it enables an unauthenticated ' +
+    'identity fallback for the credit system. Unset DEV_USER_ID before starting.'
+  );
+}
 
 module.exports = Object.freeze(config);

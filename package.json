@@ -15,6 +15,7 @@
     "vendor:ocr": "node scripts/vendor-ocr.mjs",
     "lint": "echo \"No linter configured yet\" && exit 0",
     "verify:advanced-export": "node scripts/verify-advanced-export.mjs",
+    "verify:credits": "node scripts/verify-credits.mjs",
     "verify:delete": "node scripts/verify-delete.js",
     "verify:docx-formatting": "node scripts/verify-docx-formatting.mjs",
     "verify:docx-highlight": "node scripts/verify-docx-highlight.mjs",
@@ -30,6 +31,7 @@
     "verify:posbox-width": "node scripts/verify-posbox-width.mjs",
     "verify:positioned-docx": "node scripts/verify-positioned-docx.mjs",
     "verify:positioned-roundtrip": "node scripts/verify-positioned-roundtrip.mjs",
+    "verify:pptx-import": "node scripts/verify-pptx-import.mjs",
     "test": "node scripts/verify-docx-exact-noboxes.mjs && node scripts/verify-docx-fully-editable.mjs && node scripts/verify-docx-lists.mjs && node scripts/verify-font-weight.mjs && node scripts/verify-graphic-regions.mjs && node scripts/verify-posbox-click.mjs && node scripts/verify-posbox-fit.mjs && node scripts/verify-positioned-docx.mjs && node scripts/verify-delete.js"
   },
   "keywords": [

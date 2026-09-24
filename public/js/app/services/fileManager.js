@@ -9,7 +9,7 @@
  */
 const ACCEPT = {
   pdf: 'application/pdf',
-  document: 'application/pdf,image/*,.txt,.md,.doc,.docx',
+  document: 'application/pdf,image/*,.txt,.md,.doc,.docx,.ppt,.pptx',
   any: 'application/pdf,image/*',
 };
 

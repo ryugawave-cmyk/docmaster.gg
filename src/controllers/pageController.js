@@ -1,6 +1,7 @@
 'use strict';
 
 const { getToolsByCategory } = require('../data/tools');
+const creditsConfig = require('../config/credits');
 
 /**
  * Controllers for the marketing / static pages of the site.
@@ -29,6 +30,10 @@ exports.pricing = (req, res) => {
     pageTitle: 'Pricing',
     metaDescription:
       'Advance Office Doc is free to use today. See what is included now and what is planned as the platform grows.',
+    // The AI credit catalogue for the "AI Credit Usage" info modal (single source
+    // of truth in config/credits.js, so the modal never drifts from real prices).
+    creditInfo: creditsConfig.creditInfo(),
+    creditPlans: creditsConfig.PLANS,
   });
 };
 

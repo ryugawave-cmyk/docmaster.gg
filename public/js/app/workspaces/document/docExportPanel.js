@@ -19,6 +19,7 @@ import { el } from '../../../workspace/utils/dom.js';
 import { renderIcon } from '../../../workspace/icons.js';
 import { blockModelToImages, compressWord, estimateWordSize } from '../../services/convert/blockMedia.js';
 import { blockModelToPdf, blockModelToXlsx, blockModelToPptx } from '../../services/convert/blockExport.js';
+import { trackEvent } from '../../core/analytics.js';
 
 // Each tool: an icon, title, description and either a `run(ctx)` (convert +
 // download immediately) or `view` (open a sub-view). `ctx` = { model, name,
@@ -321,6 +322,7 @@ export function createDocExportPanel({ getModel, getDocName, downloadBlob, toast
       downloadBlob(res.blob, res.filename);
       setBusy(false);
       renderCompressResult(res);
+      trackEvent('document_export', { format: 'compress' });
       toast?.(`Exported ${res.filename}`);
     } catch (err) {
       console.error('[doc-export] compress', err);
@@ -382,6 +384,8 @@ export function createDocExportPanel({ getModel, getDocName, downloadBlob, toast
       if (!files || !files.length) { setBusy(false); setError('Nothing was produced.'); return; }
       for (const f of files) downloadBlob(f.blob, f.filename);
       setBusy(false);
+      // One export event per action, even when a tool emits many page images.
+      trackEvent('document_export', { format: tool.id });
       if (files.length === 1) {
         setDone({ filename: files[0].filename, extra: out.extra });
         toast?.(`Exported ${files[0].filename}`);

@@ -13,6 +13,7 @@ import { keyboard } from './core/keyboard.js';
 import { logCapabilities } from './core/capabilities.js';
 import { registerTesseractOcr } from './core/ai/ocrTesseract.js';
 import { createEventBus } from './core/eventBus.js';
+import { trackEvent } from './core/analytics.js';
 import { createAppStore } from './core/appStore.js';
 import { createWorkspaceRegistry } from './core/workspaceRegistry.js';
 import { createWorkspaceManager } from './core/workspaceManager.js';
@@ -126,9 +127,41 @@ function boot(root) {
   });
 
   wireCommands({ root, els, bus, store, manager, services });
+  wireAnalytics({ bus });
 
   // Start on Home.
   manager.activate('home', { view: 'home' });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  GA4 analytics — the single place that maps bus events to GA4 events.       */
+/* -------------------------------------------------------------------------- */
+// Subscriptions only; no state. Each maps an internal bus signal to one GA4
+// event. These never fire on a page refresh: a refresh reboots the SPA to Home
+// (an ignored workspace) and performs no export/convert/AI action. Editor-side
+// export panels (pdf/document "Advanced Export") report their own events at the
+// point of a successful conversion — see editor/exportPanel.js and
+// workspaces/document/docExportPanel.js.
+function wireAnalytics({ bus }) {
+  // editor_open — a real editor became active. `reactivated` guards against
+  // re-emitting when an already-open workspace is re-selected; 'home' is ignored.
+  bus.on('workspace:change', ({ id, reactivated } = {}) => {
+    if (reactivated) return;
+    if (id === 'pdf' || id === 'document') trackEvent('editor_open', { editor: id });
+  });
+
+  // ai_request — the user sent a prompt to the in-editor AI assistant.
+  bus.on('doc:ai-request', () => trackEvent('ai_request', { source: 'document' }));
+
+  // Quick Export (both editors) flows through the shared export manager, which
+  // emits export:done. Advanced Export bypasses it and reports separately, so
+  // there is no double counting. PDF exports are conversions; Document exports
+  // are document_export.
+  bus.on('export:done', ({ workspaceId, options } = {}) => {
+    const format = (options && options.format) || 'pdf';
+    if (workspaceId === 'document') trackEvent('document_export', { format });
+    else if (workspaceId === 'pdf') trackEvent('pdf_convert', { format });
+  });
 }
 
 /* -------------------------------------------------------------------------- */

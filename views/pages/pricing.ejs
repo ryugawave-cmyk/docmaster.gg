@@ -13,11 +13,32 @@ const hi = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
   bell:   '<path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.5 20a2 2 0 0 0 3 0"/>',
   arrow:  '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  info:   '<circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.2"/><circle cx="12" cy="7.6" r="1.05" fill="currentColor" stroke="none"/>',
+  spark:  '<path d="M12 3l1.7 5.1a3 3 0 0 0 1.9 1.9L21 12l-5.4 1.7a3 3 0 0 0-1.9 1.9L12 21l-1.7-5.4a3 3 0 0 0-1.9-1.9L3 12l5.4-1.7a3 3 0 0 0 1.9-1.9L12 3Z"/>',
 };
 function ic(name) {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (hi[name] || hi.cube) + '</svg>';
 }
 const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
+// AI credit catalogue — DERIVED from src/config/credits.js (passed in as
+// `creditInfo` + `creditPlans`) so this modal can never drift from the real
+// prices. Grouped by cost so it reads as "what each task costs".
+// `typeof` guards: EJS here throws on a truly-undefined identifier, so never
+// reference the locals bare — tolerate an older caller that didn't pass them.
+const _ci = (typeof creditInfo !== 'undefined' && creditInfo && creditInfo.groups) ? creditInfo.groups : [];
+const _cp = (typeof creditPlans !== 'undefined' && creditPlans) ? creditPlans : {};
+const byCost = {};
+_ci.forEach(function (g) {
+  (g.items || []).forEach(function (it) {
+    (byCost[it.cost] = byCost[it.cost] || []).push(it.label);
+  });
+});
+const creditTiers = Object.keys(byCost).map(Number).sort(function (a, b) { return a - b; })
+  .map(function (c) { return { c: c, tasks: byCost[c] }; });
+const creditPlanRows = Object.keys(_cp).map(function (k) {
+  return { name: _cp[k].label, credits: _cp[k].monthlyCredits };
+});
 %>
 
 <section class="pp">
@@ -39,6 +60,12 @@ const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
       <input type="radio" name="billing" id="bill-yearly" class="billing__radio">
       <label for="bill-yearly" class="billing__opt">Yearly <span class="billing__save">Save 20%</span></label>
     </div>
+
+    <!-- AI credits explainer trigger -->
+    <div class="pp__info-row">
+      <button type="button" class="pp__info" data-ai-credits-open aria-haspopup="dialog" aria-controls="pp-ai-modal" aria-label="How AI credits work"><%- ic('info') %></button>
+      <button type="button" class="pp__info-link" data-ai-credits-open>How AI credits work</button>
+    </div>
   </div>
 
   <!-- ===== Plans ===== -->
@@ -58,6 +85,24 @@ const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
         <li><span class="check"><%- checkSvg %></span> No account required</li>
       </ul>
       <a href="/workspace" class="plan__btn plan__btn--outline">Start using now <%- ic('arrow') %></a>
+    </article>
+
+    <!-- Lite -->
+    <article class="plan">
+      <span class="plan__ico"><%- ic('bolt') %></span>
+      <h2 class="plan__name">Lite</h2>
+      <p class="plan__tag">A little extra for regular users.</p>
+      <p class="plan__soon grad">Coming soon</p>
+      <p class="plan__soon-sub">Affordable upgrade in development.</p>
+      <hr class="plan__rule" />
+      <ul class="plan__feat">
+        <li><span class="check"><%- checkSvg %></span> Everything in Free</li>
+        <li><span class="check"><%- checkSvg %></span> Higher file size limits</li>
+        <li><span class="check"><%- checkSvg %></span> Faster on-device processing</li>
+        <li><span class="check"><%- checkSvg %></span> Remove usage limits</li>
+        <li><span class="check"><%- checkSvg %></span> Email support</li>
+      </ul>
+      <a href="/contact" class="plan__btn plan__btn--outline"><%- ic('bell') %> Notify me</a>
     </article>
 
     <!-- Pro (featured) -->
@@ -98,4 +143,81 @@ const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
     </article>
   </div>
 
+  <!-- ===== AI credits modal ===== -->
+  <div class="pp-modal" id="pp-ai-modal" role="dialog" aria-modal="true" aria-labelledby="pp-ai-modal-title" hidden>
+    <div class="pp-modal__backdrop" data-ai-credits-close></div>
+    <div class="ppm" role="document">
+      <div class="ppm__head">
+        <span class="ppm__head-ico"><%- ic('spark') %></span>
+        <div>
+          <h2 class="ppm__title" id="pp-ai-modal-title">How AI credits work</h2>
+          <p class="ppm__sub">AI features run on credits. Each request costs credits based on the task’s complexity — quick edits cost the least, full documents cost more. Your balance refills every 3 days.</p>
+        </div>
+        <button type="button" class="ppm__close" data-ai-credits-close aria-label="Close">&times;</button>
+      </div>
+
+      <div class="ppm__body">
+        <p class="ppm__section-title">What each task costs</p>
+        <ul class="ppm__tiers">
+          <% creditTiers.forEach(function (t) { %>
+          <li class="ppm__tier">
+            <span class="ppm__cost">
+              <span class="ppm__cost-num"><%= t.c %></span>
+              <span class="ppm__cost-lbl"><%= t.c > 1 ? 'credits' : 'credit' %></span>
+            </span>
+            <span class="ppm__tasks">
+              <% t.tasks.forEach(function (task) { %><span class="ppm__task"><%= task %></span><% }) %>
+            </span>
+          </li>
+          <% }) %>
+        </ul>
+
+        <p class="ppm__section-title">Credits per plan (every 3 days)</p>
+        <div class="ppm__plans">
+          <% creditPlanRows.forEach(function (p) { %>
+          <div class="ppm__plan">
+            <span class="ppm__plan-name"><%= p.name %></span>
+            <span class="ppm__plan-credits"><%= p.credits.toLocaleString() %> <span>/ 3 days</span></span>
+          </div>
+          <% }) %>
+        </div>
+
+        <p class="ppm__note">Credits refill every 3 days and don’t roll over. You’ll always see your remaining balance in the editor, and AI simply pauses when you run out — nothing is ever charged without your say-so.</p>
+      </div>
+    </div>
+  </div>
+
 </section>
+
+<script nonce="<%= nonce %>">
+(function () {
+  'use strict';
+  var modal = document.getElementById('pp-ai-modal');
+  if (!modal) return;
+  var opens = document.querySelectorAll('[data-ai-credits-open]');
+  var closers = modal.querySelectorAll('[data-ai-credits-close]');
+  var lastFocus = null;
+
+  function open() {
+    lastFocus = document.activeElement;
+    modal.hidden = false;
+    document.body.classList.add('pp-modal-open');
+    void modal.offsetWidth; // reflow so the transition runs from the hidden state
+    modal.classList.add('is-open');
+    var c = modal.querySelector('.ppm__close');
+    if (c) c.focus();
+    document.addEventListener('keydown', onKey);
+  }
+  function close() {
+    modal.classList.remove('is-open');
+    document.body.classList.remove('pp-modal-open');
+    document.removeEventListener('keydown', onKey);
+    window.setTimeout(function () { if (!modal.classList.contains('is-open')) modal.hidden = true; }, 220);
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+
+  Array.prototype.forEach.call(opens, function (b) { b.addEventListener('click', open); });
+  Array.prototype.forEach.call(closers, function (b) { b.addEventListener('click', close); });
+})();
+</script>

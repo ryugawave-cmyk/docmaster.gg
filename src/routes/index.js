@@ -7,6 +7,7 @@ const toolRoutes = require('./tools');
 const workspaceRoutes = require('./workspace');
 const aiRoutes = require('./ai');
 const contactRoutes = require('./contact');
+const adminRoutes = require('./admin');
 
 const router = express.Router();
 
@@ -22,5 +23,6 @@ router.use('/workspace', workspaceRoutes);
 router.use('/tools', toolRoutes);
 router.use('/api/ai', aiRoutes);
 router.use('/api/contact', contactRoutes);
+router.use('/admin', adminRoutes);
 
 module.exports = router;

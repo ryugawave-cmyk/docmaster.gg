@@ -888,6 +888,61 @@
 @keyframes doc-ai-flow { to { background-position: 260% 0, 260% 0; } }
 @media (prefers-reduced-motion: reduce) { .doc-ai-btn, .doc-ai-btn__txt { animation: none; } }
 
+/* ---- Header credit badge: remaining AI credits + plan (sits left of the AI
+   Assistant button). Links to /pricing; warns amber when low, red when empty. ---- */
+.doc-credit {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 12px;
+  border: 1px solid var(--ws-border); border-radius: 999px;
+  background: var(--ws-surface, #fff); color: var(--ws-text);
+  font: 600 13px/1 var(--ws-font); text-decoration: none; white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+}
+.doc-credit[hidden] { display: none; }
+.doc-credit:hover {
+  border-color: color-mix(in srgb, #a855f7 45%, var(--ws-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, #a855f7 12%, transparent);
+}
+.doc-credit__ico { display: inline-flex; color: #a855f7; }
+.doc-credit__ico .ws-icon { width: 15px; height: 15px; }
+.doc-credit__num { font-weight: 800; font-variant-numeric: tabular-nums; }
+.doc-credit__plan {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--ws-text-soft); padding-left: 7px; margin-left: 1px;
+  border-left: 1px solid var(--ws-border);
+}
+.doc-credit__plan[hidden] { display: none; }
+/* Low balance (< 10): amber warning. */
+.doc-credit.is-low {
+  border-color: #f59e0b; color: #b45309;
+  background: color-mix(in srgb, #f59e0b 10%, var(--ws-surface, #fff));
+}
+.doc-credit.is-low .doc-credit__ico { color: #f59e0b; }
+.doc-credit.is-low .doc-credit__plan { color: #b45309; border-left-color: color-mix(in srgb, #f59e0b 40%, transparent); }
+/* Critical (< 5): red warning (like empty, but not pulsing — still usable). */
+.doc-credit.is-critical {
+  border-color: #ef4444; color: #b91c1c;
+  background: color-mix(in srgb, #ef4444 10%, var(--ws-surface, #fff));
+}
+.doc-credit.is-critical .doc-credit__ico { color: #ef4444; }
+.doc-credit.is-critical .doc-credit__plan { color: #b91c1c; border-left-color: color-mix(in srgb, #ef4444 40%, transparent); }
+/* Empty (<= 0): red, gently pulsing to draw the eye. */
+.doc-credit.is-empty {
+  border-color: #ef4444; color: #b91c1c;
+  background: color-mix(in srgb, #ef4444 12%, var(--ws-surface, #fff));
+  animation: doc-credit-pulse 2s ease-in-out infinite;
+}
+.doc-credit.is-empty .doc-credit__ico { color: #ef4444; }
+.doc-credit.is-empty .doc-credit__plan { color: #b91c1c; border-left-color: color-mix(in srgb, #ef4444 40%, transparent); }
+@keyframes doc-credit-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #ef4444 40%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, #ef4444 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .doc-credit.is-empty { animation: none; } }
+/* On tighter widths, drop the plan label to keep the header tidy. */
+@media (max-width: 980px) { .doc-credit__plan { display: none; } }
+
 /* ---- AI Assistant: docked right SIDEBAR (conversation + tools) that resizes the
    document, plus a floating bottom PROMPT BAR. Both animate in via the workspace
    `.app-ws--document.is-ai-open` state class (one coordinated open/close). ---- */
@@ -939,6 +994,8 @@
 .doc-ai__empty-ico .ws-icon { width: 22px; height: 22px; }
 .doc-ai__empty-title { font-weight: 700; font-size: 13.5px; color: var(--ws-text); margin-bottom: 3px; }
 .doc-ai__empty-sub { font-size: 11.5px; line-height: 1.45; }
+/* One-click "edit this document" chips shown under the empty-state hint. */
+.doc-ai__empty-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
 
 /* Bottom prompt bar — floats at the bottom-centre of the (resizing) document column;
    slides up + fades in with the sidebar. */
@@ -954,15 +1011,21 @@
 }
 .app-ws--document.is-ai-open .doc-ai-dock { transform: translate(-50%, 0); opacity: 1; visibility: visible; }
 .doc-ai-dock > * { pointer-events: auto; }
-/* Quick-task suggestion chips row above the bar — hidden until the `+` reveals it. */
-.doc-ai-tasks { display: none; flex-wrap: wrap; gap: 5px; justify-content: center; }
+/* Quick-task suggestion chips above the bar — hidden until the `+` reveals it.
+   Two labelled groups (edit the open document / create new) stack vertically. */
+.doc-ai-tasks { display: none; flex-direction: column; gap: 4px; }
 .doc-ai-dock.is-tasks-open .doc-ai-tasks { display: flex; }
+.doc-ai-tasks__label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ws-text-soft, #64748b); text-align: center; margin-top: 2px; }
+.doc-ai-tasks__row { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
 .doc-ai-task {
   padding: 3px 9px; border: 1px solid var(--ws-border); border-radius: 999px; cursor: pointer;
   background: var(--ws-surface, #fff); color: var(--ws-text); font-size: 11px; font-weight: 600; white-space: nowrap;
   box-shadow: 0 3px 10px rgba(19, 22, 45, 0.10);
 }
 .doc-ai-task:hover { border-color: color-mix(in srgb, #a855f7 45%, transparent); color: var(--ws-primary-dark, #4f46e5); }
+/* Document-edit chips get a subtle accent so they read as "act on my document". */
+.doc-ai-task--edit { border-color: color-mix(in srgb, #a855f7 40%, var(--ws-border)); color: var(--ws-primary-dark, #4f46e5); }
+.doc-ai-task--edit:hover { background: color-mix(in srgb, #a855f7 10%, var(--ws-surface, #fff)); }
 /* align-items:flex-end keeps the +/upload/send/close pinned to the BOTTOM as the
  * textarea grows to multiple lines (send stays bottom-right, ChatGPT-style). */
 .doc-ai-bar {
@@ -1044,6 +1107,53 @@
 }
 .doc-ai__insert:hover { filter: brightness(1.08); }
 .doc-ai__insert[hidden] { display: none; }
+
+/* Credit meta line under an AI reply: the estimate before, actual cost after. */
+.doc-ai__meta {
+  margin-top: 6px; font-size: 11px; font-weight: 600; letter-spacing: .01em;
+  color: var(--ws-text-soft, #64748b);
+}
+.doc-ai__meta[hidden] { display: none; }
+
+/* The ⓘ credit-usage button in the AI sidebar header. */
+.doc-ai-side__info { font-size: 13px; line-height: 1; padding: 3px 7px; }
+.doc-ai-side__info:hover { color: #a855f7; }
+
+/* ---- "AI Credit Usage" info modal (⚡ ⓘ) ---- */
+.credit-info {
+  position: fixed; inset: 0; z-index: 3000; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(15, 16, 32, 0.55); backdrop-filter: blur(3px);
+}
+.credit-info__card {
+  width: min(440px, 100%); max-height: 86vh; overflow: auto;
+  background: var(--ws-surface, #fff); color: var(--ws-text);
+  border: 1px solid var(--ws-border); border-radius: 16px; padding: 20px 22px;
+  box-shadow: 0 24px 60px rgba(15, 16, 32, 0.35);
+}
+.credit-info__head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.credit-info__ico { display: inline-flex; color: #a855f7; }
+.credit-info__ico .ws-icon { width: 20px; height: 20px; }
+.credit-info__title { margin: 0; font: 800 18px/1.2 var(--ws-font); flex: 1; }
+.credit-info__x {
+  flex: 0 0 auto; width: 28px; height: 28px; border: 0; border-radius: 8px; cursor: pointer;
+  background: transparent; color: var(--ws-text-soft, #64748b); font-size: 14px;
+}
+.credit-info__x:hover { background: var(--ws-primary-soft, #eef2ff); color: var(--ws-text); }
+.credit-info__group { margin-bottom: 14px; }
+.credit-info__group-title {
+  font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+  color: #a855f7; margin-bottom: 6px;
+}
+.credit-info__list { list-style: none; margin: 0; padding: 0; }
+.credit-info__row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--ws-border) 60%, transparent);
+  font-size: 13px;
+}
+.credit-info__row:last-child { border-bottom: 0; }
+.credit-info__label { color: var(--ws-text); }
+.credit-info__cost { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ws-primary-dark, #4f46e5); }
+.credit-info__note { margin: 6px 0 0; font-size: 12px; color: var(--ws-text-soft, #64748b); }
 
 /* Two-tier Download menu: primary Quick Export + Advanced Export. */
 .doc-export-menu--rich { min-width: 264px; padding: 7px; }

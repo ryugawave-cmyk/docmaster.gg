@@ -26,6 +26,7 @@ import { modelToXlsx } from '../services/convert/xlsx.js';
 import { modelToPptx } from '../services/convert/pptx.js';
 import { modelToHtml } from '../services/convert/html.js';
 import { modelToImages } from '../services/convert/images.js';
+import { trackEvent } from '../core/analytics.js';
 
 const TOOLS = [
   { id: 'compress', icon: 'compress', label: 'Compress PDF', desc: 'Reduce the file size' },
@@ -473,6 +474,9 @@ export function createExportPanel({ mount, bus, getModel, getDocName, downloadBl
   function setDone({ blob, filename, extra, warn }) {
     busy = false;
     overlay?.classList.remove('is-busy');
+    // A successful conversion — the single success point for every tool
+    // (compress + PDF→Word/Excel/PPT/JPG/PNG/HTML). `selectedId` is the format.
+    trackEvent('pdf_convert', { format: selectedId });
     const dl = () => { downloadBlob(blob, filename); };
     const main = el('div', { class: 'bpx-exp__result-main' }, [
       el('div', { class: 'bpx-exp__result-lbl' }, `${filename}`),

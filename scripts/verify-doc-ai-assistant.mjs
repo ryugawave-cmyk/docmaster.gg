@@ -81,6 +81,10 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><link rel="stylesheet" href
         out = { actions: [{ action: 'format_text', target: 'selection', format: { bold: p.includes('bold'), italic: p.includes('italic') } }] };
       } else if (sel) {
         out = { actions: [{ action: 'replace_selection', content: 'EDITED_ALPHA formal line.\\n\\nEDITED_BETA second paragraph.' }] };
+      } else if (p.includes('improve the writing quality')) {
+        // The "Improve writing" document-action chip → whole-doc rewrite in place.
+        // (Checked before the keyword branches: its instruction mentions "tables".)
+        out = { actions: [{ action: 'replace_all', content: '# IMPROVEDWHOLEDOC\\n\\nPolished, improved content.' }] };
       } else if (p.includes('table')) {
         out = { actions: [{ action: 'create_table', headers: ['Name', 'Class', 'Marks'], rows: [['Asha', '10', '95'], ['Ravi', '10', '88']] }] };
       } else if (p.includes('list')) {
@@ -130,12 +134,15 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><link rel="stylesheet" href
     const openAfter = isOpen();
     const barVisible = !!bar && bar.getBoundingClientRect().height > 10;
     const sidebarBeforeTask = Math.round((document.querySelector('.doc-ai-sidebar')?.getBoundingClientRect().width) || 0);
+    // The empty-state "edit this document" chips are a first-open affordance (the
+    // empty hint is dropped once the conversation starts) — capture them now.
+    const emptyDocActions = document.querySelectorAll('.doc-ai__empty-actions .doc-ai-task--edit').length;
     // Local (network-free) word-count fast path still answers instantly.
     await sendPrompt('word count', 400);
     const msgCount = document.querySelectorAll('.doc-ai__msg').length;
     const convoInSidebar = !!document.querySelector('.doc-ai-sidebar .doc-ai__msg');
     const sidebarWidth = Math.round((document.querySelector('.doc-ai-sidebar')?.getBoundingClientRect().width) || 0);
-    return { ...before, openAfter, barVisible, sidebarBeforeTask, sidebarWidth, msgCount, convoInSidebar };
+    return { ...before, openAfter, barVisible, sidebarBeforeTask, emptyDocActions, sidebarWidth, msgCount, convoInSidebar };
   };
   window.closeBar = () => { document.querySelector('.doc-ai-bar__close').click(); return !isOpen(); };
   // insert_text: a "write…" request auto-writes structured content into the page.
@@ -352,6 +359,45 @@ const TEST_HTML = `<!doctype html><meta charset=utf8><link rel="stylesheet" href
     } catch (e) { uploaded = 'skip:' + e.message; }
     return { hiddenByDefault, plusRevealsChips, hasUploadBtn: !!uploadBtn, uploadLocked, recreatedForm: uploaded };
   };
+  // One-click "edit this document" actions (improve/fix/shorten/analyze) — the
+  // discoverable way to run whole-document AI edits on an uploaded/typed doc. They
+  // appear in the empty state AND the + popover, and "Improve writing" rewrites the
+  // whole document in place (agent replace_all).
+  window.testDocActionChips = async () => {
+    // Clear any lingering selection so this exercises the WHOLE-document path
+    // (with a selection the agent would edit only the selection instead).
+    const s = window.getSelection(); s.removeAllRanges();
+    const blk = document.querySelector('.doc-page p, .doc-page h1, .doc-page h2');
+    if (blk) { const rg = document.createRange(); rg.setStart(blk, 0); rg.collapse(true); s.addRange(rg); }
+    await new Promise(r => setTimeout(r, 60));
+    // The + popover carries an "Edit this document" group (available any time).
+    const more = document.querySelector('.doc-ai-bar__more');
+    more.click();
+    const popEditChips = [...document.querySelectorAll('.doc-ai-tasks .doc-ai-task--edit')].map(b => (b.textContent || '').trim());
+    // Clicking "Improve writing" rewrites the whole document in place (replace_all).
+    const improve = [...document.querySelectorAll('.doc-ai-tasks .doc-ai-task--edit')].find(b => /Improve/.test(b.textContent));
+    if (improve) improve.click();
+    await new Promise(r => setTimeout(r, 500));
+    return { popEditChips, improvedWholeDoc: pageText().includes('IMPROVEDWHOLEDOC') };
+  };
+  // AI-rewritten text should INHERIT the document's font (an uploaded doc's own
+  // typeface), not fall back to the editor default — the "same similar text" ask.
+  window.testFontInherit = async () => {
+    const p = [...document.querySelectorAll('.doc-page p')].find(b => (b.textContent || '').trim());
+    if (!p) return { skipped: true };
+    // Give the paragraph a distinctive font, like an uploaded document would carry.
+    const spans = [...p.querySelectorAll('span')];
+    if (spans.length) spans.forEach(sp => { sp.style.fontFamily = 'Georgia'; });
+    else p.style.fontFamily = 'Georgia';
+    await selectBlock(p);
+    await sendPrompt('make it formal', 500); // mock → replace_selection (EDITED_ALPHA…)
+    const edited = [...document.querySelectorAll('.doc-page p, .doc-page h1, .doc-page h2')].find(b => /EDITED_ALPHA/.test(b.textContent));
+    if (!edited) return { edited: false };
+    const w = document.createTreeWalker(edited, NodeFilter.SHOW_TEXT);
+    let node; while ((node = w.nextNode())) { if ((node.textContent || '').trim()) break; }
+    const fam = node ? getComputedStyle(node.parentElement).fontFamily : '';
+    return { edited: true, fontFamily: fam, inherited: /georgia/i.test(fam) };
+  };
 </script></body>`;
 
 const server = http.createServer((req, res) => {
@@ -401,6 +447,8 @@ try {
   const repAll = await page.evaluate(() => window.testReplaceAll());
   const pag = await page.evaluate(() => window.testPaginate());
   const plusUp = await page.evaluate(() => window.testPlusAndUpload());
+  const docAct = await page.evaluate(() => window.testDocActionChips());
+  const fontInh = await page.evaluate(() => window.testFontInherit());
   check('AI Assistant button is present', r.hasBtn, r.hasBtn);
   check('button reads "AI Assistant"', (r.btnText || '').includes('AI Assistant'), r.btnText);
   check('bar is built (armed) but hidden before first click', r.dockBefore === true && r.openBefore === false, `${r.dockBefore}/${r.openBefore}`);
@@ -458,6 +506,10 @@ try {
   check('the image button is locked (coming soon)', plusUp.uploadLocked === true, plusUp.uploadLocked);
   check('image→editable pipeline still works (unlock-ready)', plusUp.recreatedForm === true, plusUp.recreatedForm);
   check('a big insert flows onto multiple pages automatically', pag.after >= 2, `${pag.before} → ${pag.after}`);
+  check('doc-action chips: 4 "edit this document" chips in the empty state', r.emptyDocActions === 4, r.emptyDocActions);
+  check('doc-action chips: also present in the + tasks popover', docAct.popEditChips.length === 4, JSON.stringify(docAct.popEditChips));
+  check('doc-action chips: "Improve writing" rewrites the whole document', docAct.improvedWholeDoc === true, docAct.improvedWholeDoc);
+  check('font inherit: AI-rewritten text keeps the document font (not the default)', fontInh.skipped === true || fontInh.inherited === true, JSON.stringify(fontInh));
 } catch (e) {
   console.log('SKIPPED:', String(e.message || e).split('\n')[0]);
   if (browser) await browser.close();
