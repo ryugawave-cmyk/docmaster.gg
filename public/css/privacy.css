@@ -161,21 +161,44 @@ body.page-privacy .site-footer { background: #060512; border-top: 1px solid var(
   width: 70px; height: 70px;
   color: #fff;
 }
-.pv-shield__lock svg { width: 46px; height: 46px; }
+.pv-shield__lock svg {
+  width: 46px; height: 46px;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 10px rgba(167, 139, 250, 0.5));
+}
 .pv-checks {
   position: absolute; top: 6px; right: 0;
   display: flex; flex-direction: column; gap: 14px;
 }
 .pv-checks li { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-size: 0.95rem; font-weight: 600; }
 .pv-checks__ico {
+  position: relative;
   display: grid; place-items: center;
   width: 26px; height: 26px;
   border-radius: 50%;
+  isolation: isolate;
   color: #fff;
-  background: var(--grad-purple);
-  box-shadow: 0 6px 16px rgba(124, 58, 237, 0.5);
+  background: linear-gradient(158deg, #c4b5fd 0%, #8b5cf6 48%, #6d28d9 100%);
+  box-shadow:
+    0 6px 16px rgba(124, 58, 237, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -3px 5px rgba(0, 0, 0, 0.32);
 }
-.pv-checks__ico svg { width: 15px; height: 15px; stroke-width: 2.4; }
+.pv-checks__ico::before {
+  content: '';
+  position: absolute;
+  inset: 1px 1px 45% 1px;
+  border-radius: 50% 50% 46% 46% / 60% 60% 30% 30%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.pv-checks__ico svg {
+  position: relative;
+  z-index: 2;
+  width: 15px; height: 15px; stroke-width: 2.4;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
 .pv-note {
   position: absolute; right: 12px; bottom: 8px;
   font-family: 'Segoe Script', 'Brush Script MT', cursive;
@@ -199,15 +222,36 @@ body.page-privacy .site-footer { background: #060512; border-top: 1px solid var(
 }
 .pv-short__head { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
 .pv-short__ico {
+  position: relative;
   display: grid; place-items: center;
   width: 54px; height: 54px;
   flex-shrink: 0;
-  border-radius: 15px;
-  color: var(--purple-bright);
-  background: rgba(139, 92, 246, 0.16);
-  border: 1px solid rgba(139, 92, 246, 0.28);
+  border-radius: 16px;
+  isolation: isolate;
+  color: #fff;
+  background: linear-gradient(158deg, #c4b5fd 0%, #8b5cf6 46%, #6d28d9 100%);
+  box-shadow:
+    0 12px 22px rgba(0, 0, 0, 0.45),
+    0 3px 6px rgba(0, 0, 0, 0.4),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -4px 8px rgba(0, 0, 0, 0.35);
 }
-.pv-short__ico svg { width: 26px; height: 26px; fill: rgba(139, 92, 246, 0.14); }
+.pv-short__ico::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px 1.5px 46% 1.5px;
+  border-radius: 14px 14px 46% 46% / 14px 14px 22px 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.pv-short__ico svg {
+  position: relative;
+  z-index: 2;
+  width: 26px; height: 26px;
+  fill: rgba(255, 255, 255, 0.18);
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
+}
 .pv-short__head h2 { font-family: var(--font-display); font-size: 1.3rem; color: #fff; margin-bottom: 4px; }
 .pv-short__head p { color: var(--ink-soft); font-size: 0.96rem; }
 .pv-short__pills { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
@@ -219,12 +263,34 @@ body.page-privacy .site-footer { background: #060512; border-top: 1px solid var(
   border: 1px solid var(--hair-2);
 }
 .pv-short__pillico {
+  position: relative;
   display: grid; place-items: center;
-  width: 26px; height: 26px; flex-shrink: 0;
-  border-radius: 7px;
-  color: #fff; background: var(--grad-purple);
+  width: 28px; height: 28px; flex-shrink: 0;
+  border-radius: 8px;
+  isolation: isolate;
+  color: #fff;
+  background: linear-gradient(158deg, #c4b5fd 0%, #8b5cf6 48%, #6d28d9 100%);
+  box-shadow:
+    0 5px 10px rgba(0, 0, 0, 0.4),
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.32);
 }
-.pv-short__pillico svg { width: 15px; height: 15px; stroke-width: 2.4; }
+.pv-short__pillico::before {
+  content: '';
+  position: absolute;
+  inset: 1px 1px 48% 1px;
+  border-radius: 7px 7px 40% 40% / 7px 7px 14px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.pv-short__pillico svg {
+  position: relative;
+  z-index: 2;
+  width: 15px; height: 15px; stroke-width: 2.4;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
 .pv-short__pills span:last-child { display: flex; flex-direction: column; line-height: 1.25; }
 .pv-short__pills strong { color: #fff; font-size: 0.88rem; }
 .pv-short__pills small { color: var(--ink-mute); font-size: 0.78rem; }
@@ -314,14 +380,34 @@ body.page-privacy .site-footer { background: #060512; border-top: 1px solid var(
   overflow: hidden;
 }
 .pv-cta__ico {
+  position: relative;
   display: grid; place-items: center;
   width: 64px; height: 64px; flex-shrink: 0;
-  border-radius: 16px;
+  border-radius: 18px;
+  isolation: isolate;
   color: #fff;
-  background: var(--grad-purple);
-  box-shadow: 0 14px 34px rgba(124, 58, 237, 0.45);
+  background: linear-gradient(158deg, #c4b5fd 0%, #8b5cf6 46%, #6d28d9 100%);
+  box-shadow:
+    0 14px 34px rgba(124, 58, 237, 0.45),
+    0 4px 8px rgba(0, 0, 0, 0.4),
+    inset 0 2px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -5px 10px rgba(0, 0, 0, 0.35);
 }
-.pv-cta__ico svg { width: 30px; height: 30px; }
+.pv-cta__ico::before {
+  content: '';
+  position: absolute;
+  inset: 2px 2px 47% 2px;
+  border-radius: 16px 16px 46% 46% / 16px 16px 26px 26px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.pv-cta__ico svg {
+  position: relative;
+  z-index: 2;
+  width: 30px; height: 30px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.45));
+}
 .pv-cta__copy { flex: 1; }
 .pv-cta__copy h2 { font-family: var(--font-display); font-size: 1.3rem; color: #fff; margin-bottom: 6px; }
 .pv-cta__copy p { color: var(--ink-soft); font-size: 0.96rem; line-height: 1.6; }

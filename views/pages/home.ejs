@@ -14,36 +14,101 @@
   <div class="container hero-inner">
     <div class="hero-content">
       <span class="eyebrow">
-        <span class="eyebrow-dot"></span>
-        The complete document toolkit
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        All-in-one document workspace
       </span>
       <h1 class="hero-title">
-        Every document tool you need,
-        <span class="text-gradient">beautifully simple.</span>
+        Edit PDFs, Documents and
+        <span class="text-gradient">Spreadsheets</span>
+        in One Place
       </h1>
       <p class="hero-subtitle">
-        Merge, split, compress, convert, edit and sign your PDFs — all in one
-        secure place. No installs, no clutter. Just powerful tools that work.
+        Create, edit, convert and export documents directly in your browser.
+        No software installation, no uploads required, and complete control
+        over your files.
       </p>
       <div class="hero-actions">
-        <a href="/workspace" class="btn btn-primary btn-lg">Open the editor</a>
+        <a href="/workspace" class="btn btn-primary btn-lg">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          Open Editor
+          <svg class="icon hero-actions__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <a href="/tools" class="btn btn-outline btn-lg">View Tools</a>
       </div>
+      <ul class="hero-features">
+        <li class="hero-feature">
+          <span class="hero-feature__icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-4"/></svg></span>
+          <span class="hero-feature__text"><strong>Secure &amp; Private</strong><small>No uploads required</small></span>
+        </li>
+        <li class="hero-feature">
+          <span class="hero-feature__icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg></span>
+          <span class="hero-feature__text"><strong>Works in Browser</strong><small>No installation</small></span>
+        </li>
+        <li class="hero-feature">
+          <span class="hero-feature__icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+          <span class="hero-feature__text"><strong>All-in-One</strong><small>PDF, Doc, Excel &amp; more</small></span>
+        </li>
+        <li class="hero-feature">
+          <span class="hero-feature__icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+          <span class="hero-feature__text"><strong>Free to Use</strong><small>Get started instantly</small></span>
+        </li>
+      </ul>
     </div>
 
     <div class="hero-visual" aria-hidden="true">
-      <div class="hero-card hero-card--main">
-        <div class="hero-card__row">
-          <span class="hero-card__dot"></span>
-          <span class="hero-card__bar"></span>
+      <div class="hero-app">
+        <div class="hero-app__bar">
+          <div class="hero-app__brand">
+            <img src="/images/logo-mark.png" alt="" width="22" height="22" />
+            <span>Advance Office Doc</span>
+          </div>
+          <div class="hero-app__menu"><span>File</span><span>Edit</span><span>Insert</span><span>Format</span><span>Tools</span><span>Help</span></div>
+          <div class="hero-app__tools">
+            <span class="hero-app__zoom">100% ▾</span>
+            <span class="hero-app__export">Export ▾</span>
+          </div>
         </div>
-        <div class="hero-card__doc">
-          <span></span><span></span><span class="short"></span>
+        <div class="hero-app__body">
+          <aside class="hero-app__side">
+            <span class="hero-app__nav is-active"><%- include('../partials/icon', { name: 'edit' }) %> PDF Editor</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'edit' }) %> Document Editor</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'organize' }) %> Spreadsheet</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'convert' }) %> Convert Files</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'organize' }) %> Organize PDF</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'sign' }) %> Sign PDF</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'ai' }) %> AI Tools</span>
+            <span class="hero-app__nav"><%- include('../partials/icon', { name: 'organize' }) %> More Tools</span>
+          </aside>
+          <div class="hero-app__doc">
+            <h3>Project Proposal</h3>
+            <p>This document outlines the project goals, scope, timeline and key deliverables for the upcoming phase.</p>
+            <div class="hero-app__cols">
+              <span class="hero-app__img"></span>
+              <span class="hero-app__lines">
+                <i></i><i></i><i class="accent"></i><i></i>
+              </span>
+            </div>
+            <h4>Key Objectives</h4>
+            <ul class="hero-app__obj">
+              <li>Improve productivity and collaboration</li>
+              <li>Streamline document workflow</li>
+              <li>Deliver high-quality results</li>
+            </ul>
+            <div class="hero-app__charts">
+              <span class="hero-app__pie"></span>
+              <span class="hero-app__bars"><i></i><i></i><i></i><i></i><i></i></span>
+            </div>
+          </div>
+          <div class="hero-app__files">
+            <span class="hero-file hero-file--pdf">PDF</span>
+            <span class="hero-file hero-file--w">W</span>
+            <span class="hero-file hero-file--x">X</span>
+            <span class="hero-file hero-file--p">P</span>
+            <span class="hero-file hero-file--img"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg></span>
+            <span class="hero-file hero-file--conv"><%- include('../partials/icon', { name: 'convert' }) %></span>
+          </div>
         </div>
-        <div class="hero-card__cta">Drop your file here</div>
       </div>
-      <div class="hero-chip hero-chip--1"><%- include('../partials/icon', { name: 'merge' }) %> Merge</div>
-      <div class="hero-chip hero-chip--2"><%- include('../partials/icon', { name: 'compress' }) %> Compress</div>
-      <div class="hero-chip hero-chip--3"><%- include('../partials/icon', { name: 'sign' }) %> Sign</div>
     </div>
   </div>
   <div class="hero-glow" aria-hidden="true"></div>
@@ -62,22 +127,22 @@
       </p>
     </div>
     <div class="features-grid">
-      <div class="feature">
+      <div class="feature" style="--accent: #6366f1;">
         <span class="feature__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'merge' }) %></span>
         <h3>PDF tools</h3>
         <p>Merge, split, compress, organize, edit and sign PDFs — reorder pages, add text and images, then export a finished file.</p>
       </div>
-      <div class="feature">
+      <div class="feature" style="--accent: #f59e0b;">
         <span class="feature__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'edit' }) %></span>
         <h3>Document editor</h3>
         <p>Write letters, reports and notes in a clean, Docs-style editor with headings, tables, images, headers and footers.</p>
       </div>
-      <div class="feature">
+      <div class="feature" style="--accent: #10b981;">
         <span class="feature__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'organize' }) %></span>
         <h3>Charts &amp; graphs</h3>
         <p>Turn your data into editable bar, line and pie charts and place them straight into a document.</p>
       </div>
-      <div class="feature">
+      <div class="feature" style="--accent: #0ea5e9;">
         <span class="feature__icon" aria-hidden="true"><%- include('../partials/icon', { name: 'convert' }) %></span>
         <h3>Convert &amp; export</h3>
         <p>Move between PDF, Word, HTML and image formats, and export tables to Excel for further analysis.</p>
@@ -113,18 +178,27 @@
       <p class="section-lead">Because processing happens in your browser, getting started is fast and private.</p>
     </div>
     <ol class="home-steps">
-      <li>
-        <span class="steps__num">1</span>
+      <li style="--accent: #6366f1;">
+        <span class="steps__icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6M9.5 15.5 12 18l2.5-2.5"/></svg>
+          <span class="steps__num">1</span>
+        </span>
         <h3>Open your file</h3>
         <p>Choose a tool and open a document from your device. It’s loaded straight into your browser — not sent to a server.</p>
       </li>
-      <li>
-        <span class="steps__num">2</span>
+      <li style="--accent: #8b5cf6;">
+        <span class="steps__icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          <span class="steps__num">2</span>
+        </span>
         <h3>Make your changes</h3>
         <p>Merge, edit, convert, sign, write or chart. Everything updates live in the editor as you work.</p>
       </li>
-      <li>
-        <span class="steps__num">3</span>
+      <li style="--accent: #10b981;">
+        <span class="steps__icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          <span class="steps__num">3</span>
+        </span>
         <h3>Export and save</h3>
         <p>Download the finished file directly to your device in the format you need. Nothing is stored by us.</p>
       </li>
@@ -192,20 +266,6 @@
         <summary>Can I convert a PDF to Word or Excel?</summary>
         <p>Yes. Use the <a href="/tools/convert-pdf">Convert</a> tools to export to Word, HTML and images, or export tables to Excel — all generated locally in your browser.</p>
       </details>
-    </div>
-  </div>
-</section>
-
-<!-- ============ Final CTA ============ -->
-<section class="section section--alt" id="get-started">
-  <div class="container">
-    <div class="cta-band">
-      <h2 class="section-title">Ready to work on your documents?</h2>
-      <p class="section-lead">Open the editor and get started in seconds — no sign-up, no uploads.</p>
-      <div class="cta-band__actions">
-        <a href="/workspace" class="btn btn-primary btn-lg">Open the editor</a>
-        <a href="/tools" class="btn btn-outline btn-lg">Explore the tools</a>
-      </div>
     </div>
   </div>
 </section>

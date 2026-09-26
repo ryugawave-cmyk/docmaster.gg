@@ -113,24 +113,24 @@ const TOOL_SECTIONS = [
     id: 'pdf', icon: 'pdf', tone: 'pdf', command: 'pdf-tool',
     title: 'PDF Tools', desc: 'Merge, split, compress, convert and secure your PDF files.',
     tools: [
-      { icon: 'merge', title: 'Merge', arg: 'merge' },
-      { icon: 'split', title: 'Split', arg: 'split' },
-      { icon: 'compress', title: 'Compress', arg: 'compress' },
-      { icon: 'image-pdf', title: 'Image → PDF', arg: 'image-to-pdf' },
-      { icon: 'rotate', title: 'Rotate', arg: 'rotate' },
-      { icon: 'extract-pages', title: 'Extract Pages', arg: 'extract-pages' },
-      { icon: 'reorder-pages', title: 'Organize Pages', arg: 'organize-pages' },
+      { icon: 'merge', title: 'Merge', arg: 'merge', accent: '#6366f1' },
+      { icon: 'split', title: 'Split', arg: 'split', accent: '#8b5cf6' },
+      { icon: 'compress', title: 'Compress', arg: 'compress', accent: '#ec4899' },
+      { icon: 'image-pdf', title: 'Image → PDF', arg: 'image-to-pdf', accent: '#0ea5e9' },
+      { icon: 'rotate', title: 'Rotate', arg: 'rotate', accent: '#f59e0b' },
+      { icon: 'extract-pages', title: 'Extract Pages', arg: 'extract-pages', accent: '#14b8a6' },
+      { icon: 'reorder-pages', title: 'Organize Pages', arg: 'organize-pages', accent: '#10b981' },
     ],
   },
   {
     id: 'doc', icon: 'new-doc', tone: 'doc', command: 'doc-tool',
     title: 'Document Tools', desc: 'Write, format, convert and export your documents.',
     tools: [
-      { icon: 'word', title: 'Word → PDF', arg: 'word-to-pdf' },
-      { icon: 'export', title: 'PDF → Word', arg: 'pdf-to-word' },
-      { icon: 'edit', title: 'DOCX Editor', arg: 'docx-editor' },
-      { icon: 'export', title: 'Export PDF', arg: 'export-pdf' },
-      { icon: 'sliders', title: 'Advanced Export', arg: 'advanced-export' },
+      { icon: 'word', title: 'Word → PDF', arg: 'word-to-pdf', accent: '#2b7cd3' },
+      { icon: 'export', title: 'PDF → Word', arg: 'pdf-to-word', accent: '#6366f1' },
+      { icon: 'edit', title: 'DOCX Editor', arg: 'docx-editor', accent: '#f59e0b' },
+      { icon: 'export', title: 'Export PDF', arg: 'export-pdf', accent: '#ec4899' },
+      { icon: 'sliders', title: 'Advanced Export', arg: 'advanced-export', accent: '#8b5cf6' },
     ],
   },
 ];
@@ -184,6 +184,7 @@ export function createHomeWorkspace({ bus, store, services }) {
           el('div', { class: 'home__tools-grid' }, sec.tools.map((t) =>
             el('button', {
               class: 'home__tool', type: 'button', title: t.title,
+              style: t.accent ? `--accent: ${t.accent};` : '',
               onClick: () => dispatch(sec.command, t.arg),
             }, [
               el('span', { class: 'home__tool-ico', html: renderIcon(t.icon) }),

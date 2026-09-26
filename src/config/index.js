@@ -27,16 +27,17 @@ const config = {
     tagline: 'Every document tool you need — in one place.',
     description:
       'Advance Office Doc is a free, browser-based document toolkit to merge, split, compress, convert, edit and sign PDFs, create and edit documents, and build charts — all processed privately in your browser.',
-    // Set SITE_URL to the production domain (e.g. https://alvionoffice.com) in
-    // the environment. Falls back to localhost for local development.
-    url: process.env.SITE_URL || 'http://localhost:3000',
-    domain: process.env.SITE_DOMAIN || 'alvionoffice.com',
+    // Production domain. Canonical URL, og:url, sitemap <loc> and robots.txt all
+    // derive from this, so it MUST be the single domain you want Google to show.
+    // Falls back to localhost for local development.
+    url: process.env.SITE_URL || 'https://advanceofficedoc.com',
+    domain: process.env.SITE_DOMAIN || 'advanceofficedoc.com',
     locale: 'en_US',
     // Contact / role addresses. Override via env once the domain's mailboxes
     // exist. These are the addresses shown across the site and in legal pages.
-    contactEmail: process.env.CONTACT_EMAIL || 'support@alvionoffice.com',
-    privacyEmail: process.env.PRIVACY_EMAIL || 'privacy@alvionoffice.com',
-    legalEmail: process.env.LEGAL_EMAIL || 'legal@alvionoffice.com',
+    contactEmail: process.env.CONTACT_EMAIL || 'support@advanceofficedoc.com',
+    privacyEmail: process.env.PRIVACY_EMAIL || 'privacy@advanceofficedoc.com',
+    legalEmail: process.env.LEGAL_EMAIL || 'legal@advanceofficedoc.com',
     // Social handles are intentionally omitted until real profiles exist so the
     // footer/contact page never link to a non-existent account.
     twitter: process.env.TWITTER_HANDLE || '',
